@@ -4,12 +4,12 @@
 ;             commandes reçues sur GP3 en format UART 8 bits, pas de parité, 1 stop.
 ;
 ;             format commande:
-;             0xAA id_pixdel r_level g_level b_level
-;             0xAA octet de synchronisation
-;             id_pixdel 0 = diffusion, id_unique 1-255
-;             r_level niveau de rouge 0-255
-;             g_level niveau de vert 0-255
-;             b_level niveau de bleu 0-255
+;             0xFF id_pixdel r_level g_level b_level
+;               0xFF synchronisation, ne doit pas être utilisé comme id_pixdel ou niveau d'intensité.
+;               id_pixdel 0 = diffusion, id_unique 1-254
+;               r_level niveau de rouge 0-254
+;               g_level niveau de vert 0-254
+;               b_level niveau de bleu 0-254
 ;
 ;MCU: PIC10F200 ou 202
 ;DATE: 2013-03-05
@@ -30,33 +30,37 @@
 
 BROADCAST EQU 0 ; identifiant message de diffusion
 
-OPTION_CFG EQU B'11000001' ; configuration registre OPTION
+OPTION_CFG EQU B'11001000' ; configuration registre OPTION
 
 RX_P EQU GP3 ; réception uart
 TX_P EQU GP1 ; transmission uart
 
-SYNC EQU H'AA' ; octet de synchronisation réception uart
-CMD_SIZE EQU 4 ; 4 octets par commande
+CMD_SIZE EQU 4 ; 5 octets par commande
 
 ; bits couleurs rgb dans GPIO
 GREEN   EQU GP0
 BLUE    EQU GP1
 RED     EQU GP2
 
+
 ; délais de bit pour 9600 BAUD
-BDLY_9600 EQU D'104'-D'10'  ; -10 pour délais boucle induit.
+BDLY_9600 EQU D'104' ;
 HDLY_9600 EQU D'52' ; délais demi-bit
 ;délais de bit pour 19200 BAUD
-BDLY_19200 EQU D'52'-D'10'
+BDLY_19200 EQU D'52'
 HDLY_19200 EQU D'26'
 ; délais de bit pour 38400 BAUD
-BDLY_38400 EQU  D'26'-D'10'
-HDLY_38400 EQU  D'12'
+BDLY_38400 EQU  D'26'
+HDLY_38400 EQU  D'13'
 
-BIT_DLY  EQU BDLY_38400
-HALF_DLY EQU HDLY_38400
+BIT_DLY  EQU BDLY_19200
+HALF_DLY EQU HDLY_19200
+PWM_PERIOD EQU HALF_DLY ; période entre chaque appel de pwm_clock
+
 
 ;;;;;;;;;;;;; macros ;;;;;;;;;;;;;;;;;;
+#define DEBUG
+
 #define RX GPIO, RX_P
 #define TX GPIO, TX_P
 
@@ -89,16 +93,26 @@ delay_us macro usec
   endif
   endm
 
+init_rcv_state macro
+    movlw CMD_SIZE
+    movwf byte_cntr
+    movlw rx_buff
+    movwf FSR
+    clrf uart_byte
+    endm
+
+
 ;;;;;;;;;;;;; variables ;;;;;;;;;;;;;;;
   udata
 uart_byte res 1 ; octet reçu sur entrée uart
+byte_cntr res 1 ; registre temporaire
+rx_buff res CMD_SIZE ; mémoire tampon réception des commandes
 delay_cntr res 1 ; compteur pour macro delay_us
 pwm res 1  ; compteur pwm
 dc_red res 1 ; rapport cyclique rouge
 dc_blue res 1 ; rapport cyclique bleu
 dc_green res 1 ; rappor cyclique vert
-cmd_buff res 5 ; mémoire tampon réception des commandes
-temp res 1 ; registre temporaire
+gpio_temp res 1 ; variable temporaire état GPIO utilisé par tâche PWM.
 
 ;;;;;;;;;;;;; code ;;;;;;;;;;;;;;;;;;;;
 
@@ -106,32 +120,34 @@ rst_vector org 0
   goto init
 
 uart_rx
-; réception RS-232 TTL
-; sortie: carry bit=1 indique qu'un octet a été reçu
-;         octet reçu dans uart_byte
-  clrc
+; réception RS-232 , 19200 BAUD
+; sortie:
+;   carry = 1 si octet reçu
+;   octet reçu dans uart_byte
   btfsc RX
-  return
+  return  ; 5uSec incluant call
   movlw H'80'
-  movwf uart_byte
-  delay_us HALF_DLY
+  movwf uart_byte ; +6uSec
+  delay_us (PWM_PERIOD - D'6')
 rx_bit_loop
-  delay_us BIT_DLY
+  call pwm_clock ; +17uSec
+  delay_us (PWM_PERIOD - D'17')
+  call pwm_clock
+  goto $+1
   setc
   btfss RX
   clrc
   rrf uart_byte, F
-  goto $+1 ;pour avoir le même nombre de cycles dans la boucle la sous-routine tx
   skpc
-  goto rx_bit_loop
-  delay_us BIT_DLY + D'4'
+  goto rx_bit_loop ; +7
+  nop
+  call pwm_clock
   setc
-  btfss RX
-  clrc ;erreur réception devrait-être un stop bit.
-  return
+  return ; +3
 
+#ifdef DEBUG
 uart_tx
-; transmet octet [uart_byte]
+; transmet octet [uart_byte] , utilisé pur deboggage.
   bcf TX
   delay_us BIT_DLY
   setc
@@ -141,66 +157,72 @@ tx_bit_loop
   bcf TX
   skpnc
   bsf TX
-  delay_us BIT_DLY
+  delay_us (BIT_DLY - D'10')
   clrc
   movf uart_byte, F
   skpz
   goto tx_bit_loop
   return
+#endif
 
-rcv_cmd
-   btfsc RX
-   return
-   call uart_rx
-   skpc
-   return
-   movlw SYNC
-   xorwf uart_byte, W
-   skpz
-   return
-   movlw cmd_buff
-   movwf FSR
-   movlw CMD_SIZE ; nombre d'octets à recevoir
-   movwf temp
-rcv_next_byte
-   btfsc RX  ; attend start bit
-   goto $-1
-   call uart_rx
-   skpc
-   return  ; erreur réception commande annulée
-   movfw uart_byte
-   movwf INDF
-   incf FSR, F
-   decfsz temp, F
-   goto rcv_next_byte
-   call exec_cmd
-   return
-
-exec_cmd
-; traite la commande reçu dans uart_byte
-    movlw cmd_buff
-    movwf FSR
-    clrw
-    xorwf INDF, W
-    skpnz
-    goto accept_cmd ; message de diffusion
-    movlw PIXDEL_ID
-    xorwf INDF, W
-    skpz   ; pixdel_id correspondant à ce pixdel
-    return ; pas concerné.
-accept_cmd ; transfert des rapports cycliques dans les variables
-    incf FSR, F
-    movfw INDF
-    movwf dc_red
-    incf FSR, F
-    movfw INDF
-    movwf dc_green
-    incf FSR, F
-    movfw INDF
-    movwf dc_blue
-    clrf pwm
+pwm_clock ; 17 uSec inclant call et return
+    incf pwm, F
+    clrf gpio_temp
+    movfw pwm
+    subwf dc_red, W
+    rlf gpio_temp, F
+    movfw pwm
+    subwf dc_blue, W
+    rlf gpio_temp, F
+    movfw pwm
+    subwf dc_green, W
+    rlf gpio_temp, F
+    comf gpio_temp, W
+#ifdef DEBUG
+    nop
+#elif
+    movwf GPIO
+#endif
     return
 
+read_cmd ;+4
+    movlw rx_buff
+    movwf FSR
+#ifdef DEBUG
+  movfw INDF
+  movwf uart_byte
+  call uart_tx
+#endif
+    call pwm_clock
+    movf INDF, W
+    skpnz
+    goto broadcast_cmd
+    xorlw PIXDEL_ID
+    skpnz
+    goto accept_cmd
+    goto cmd_exit
+broadcast_cmd
+    nop
+    goto $+1
+accept_cmd
+    goto $+1
+    call pwm_clock
+    incf FSR, F
+    comf INDF, W
+    movwf dc_red
+    incf FSR, F
+    comf INDF, W
+    movwf dc_green
+    incf FSR, F
+    comf INDF, W
+    movwf dc_blue
+    call pwm_clock
+    delay_us (PWM_PERIOD - D'17'- 1)
+cmd_exit
+    nop
+    call pwm_clock
+    init_rcv_state ;+6
+    return ;+8
 
 
 ;;;;;;;;;;;; initialisation MCU ;;;;;;;
@@ -211,60 +233,56 @@ init
   option
   clrw
   tris GPIO
-  movlw 8
-clear_ram
-  movwf FSR
-  clrf INDF
-  incf FSR, F
-  btfss FSR, 5
-  goto clear_ram
   bsf GPIO, RED
   bsf GPIO, GREEN
   bsf GPIO, BLUE
   movlw D'255'
-  movwf temp
+  movwf gpio_temp
   clrf TMR0
   movlw D'250'
   subwf TMR0, W
   skpc
   goto $-3
-  decfsz temp, F
+  decfsz gpio_temp, F
   goto $-6
   clrf GPIO
+  init_rcv_state
+  clrf pwm
+  movlw H'FF'
+  movwf dc_red
+  movwf dc_green
+  movwf dc_blue
 
 ;;;;;;;;;;;; boucle principale ;;;;;;;;
 main
-    incf pwm, F
-    clrf temp
-red_channel
-    movfw pwm
-    skpz
-    subwf dc_red, W
-    skpnc
-    bsf temp, RED
-    btfss RX
-    goto start_bit
-green_channel
-    movfw pwm
-    skpz
-    subwf dc_green, W
-    skpnc
-    bsf temp, GREEN
-    btfss RX
-    goto start_bit
-blue_channel
-    movfw pwm
-    skpz
-    subwf dc_blue, W
-    skpnc
-    bsf temp, BLUE
-    movfw temp
-    movwf GPIO
-    btfsc RX
+;   attend octet de synchronisation
+    call pwm_clock
+    call uart_rx
+    skpc
     goto main
-start_bit
-    call rcv_cmd
+chk_sync
+    comf uart_byte, W
+    skpz
     goto main
+receiving_loop ; réception d'une commande
+    call pwm_clock ; + 17uSec
+    call uart_rx  ; 5uSec si rien reçu
+    skpc  ; +2 si rien reçu
+;    goto store_byte ;
+    goto receiving_loop ; +2,  total boucle 26uSec
+store_byte ; +6
+    movfw uart_byte
+    movwf INDF
+    call pwm_clock
+    incf  FSR, F
+    decfsz byte_cntr, F
+    goto receiving_loop
+    call read_cmd
+;    nop
+;    call pwm_clock
+;    delay_us (PWM_PERIOD - D'7')
+    goto main
+
     end
 
 
