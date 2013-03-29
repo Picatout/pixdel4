@@ -1,0 +1,390 @@
+Disassembly Listing for pixdel4
+Generated From:
+C:/Users/Jacques/Documents/GitHub/pixdel4/pixdel4.X/dist/default/production/pixdel4.X.production.cof
+2013-03-29 14:57:26
+
+---  C:/Users/Jacques/Documents/GitHub/pixdel4/pixdel4.X/pixdel4.asm  -----------------------------------
+                                                  1:     ;NOM: pixdel4.asm
+                                                  2:     ;DESCRIPTION: version 3 du pixdel (version simplifiée).
+                                                  3:     ;             LED RGB controlée par un PIC10F200 ou PIC10F202
+                                                  4:     ;             commandes reçues sur GP3 en format UART 8 bits, pas de parité, 1 stop.
+                                                  5:     ;
+                                                  6:     ;             format commande:
+                                                  7:     ;             0xFF id_pixdel r_level g_level b_level
+                                                  8:     ;               0xFF synchronisation, ne doit pas être utilisé comme id_pixdel ou niveau d'intensité.
+                                                  9:     ;               id_pixdel 0 = diffusion, id_unique 1-254
+                                                  10:    ;               r_level niveau de rouge 0-254
+                                                  11:    ;               g_level niveau de vert 0-254
+                                                  12:    ;               b_level niveau de bleu 0-254
+                                                  13:    ;
+                                                  14:    ;MCU: PIC10F200 ou 202
+                                                  15:    ;DATE: 2013-03-05
+                                                  16:    ;AUTEUR: Jacques Deschênes
+                                                  17:    ;REVISION: 2013-03-23
+                                                  18:    ;          version 4, augmentation de la vitesse uart_rx à 38400 BAUD
+                                                  19:    
+                                                  20:    
+                                                  21:      include <P10F202.INC>
+                                                  22:    
+                                                  23:      __config _WDTE_OFF & _MCLRE_OFF
+                                                  24:    
+                                                  25:    ;;;;;;;;;;;;; constantes ;;;;;;;;;;;;;;
+                                                  26:    ;PIXDEL_ID EQU 1 ; 1-255 doit-être différent pour chaque pixdel
+                                                  27:    ; pour des raisons pratique PIXDEL_ID est maintenant défini sur comme macro
+                                                  28:    ; de ligne de commande mpasm.   mpasm -d PIXDEL_ID=n
+                                                  29:    ;
+                                                  30:    
+                                                  31:    BROADCAST EQU 0 ; identifiant message de diffusion
+                                                  32:    
+                                                  33:    OPTION_CFG EQU B'11001000' ; configuration registre OPTION
+                                                  34:    
+                                                  35:    RX_P EQU GP3 ; réception uart
+                                                  36:    TX_P EQU GP1 ; transmission uart
+                                                  37:    
+                                                  38:    CMD_SIZE EQU 4 ;  octets par commande
+                                                  39:    
+                                                  40:    ; bits couleurs rgb dans GPIO
+                                                  41:    GREEN   EQU GP0
+                                                  42:    BLUE    EQU GP1
+                                                  43:    RED     EQU GP2
+                                                  44:    
+                                                  45:    
+                                                  46:    ; délais de bit pour 9600 BAUD
+                                                  47:    BDLY_9600 EQU D'104' ;
+                                                  48:    HDLY_9600 EQU D'52' ; délais demi-bit
+                                                  49:    BDLY_14400 EQU D'69'
+                                                  50:    HDLY_14400 EQU D'35'
+                                                  51:    ;délais de bit pour 19200 BAUD
+                                                  52:    BDLY_19200 EQU D'52'
+                                                  53:    HDLY_19200 EQU D'26'
+                                                  54:    ; délais de bit pour 38400 BAUD
+                                                  55:    BDLY_38400 EQU  D'26'
+                                                  56:    HDLY_38400 EQU  D'13'
+                                                  57:    
+                                                  58:    BIT_DLY  EQU BDLY_9600
+                                                  59:    HALF_DLY EQU HDLY_9600
+                                                  60:    PWM_PERIOD EQU (~HALF_DLY) + 1 ; période entre chaque appel de pwm_clock
+                                                  61:    
+                                                  62:    ; indicateurs booléens
+                                                  63:    F_RDBIT EQU 0  ; toggle lecture bit à tous les 2 cycles
+                                                  64:    F_STOP EQU 1  ; réception stop bit
+                                                  65:    F_BYTE EQU 2 ; octet reçu au complet
+                                                  66:    F_CMD  EQU 8 ; commande reçu et prête à être lue
+                                                  67:    
+                                                  68:    
+                                                  69:    ;;;;;;;;;;;;; macros ;;;;;;;;;;;;;;;;;;
+                                                  70:    ;#define DEBUG
+                                                  71:    
+                                                  72:    #define RX GPIO, RX_P
+                                                  73:    #define TX GPIO, TX_P
+                                                  74:    
+                                                  75:    ; délais en micro-secondes basé sur un Tcy de 1usec.
+                                                  76:    ; délais maximal  3*255+2=767usec
+                                                  77:    delay_us macro usec
+                                                  78:      local q=(usec-2)/3
+                                                  79:      if q>0
+                                                  80:        movlw q
+                                                  81:        movwf delay_cntr
+                                                  82:        decfsz delay_cntr,F
+                                                  83:        goto $-1
+                                                  84:        nop
+                                                  85:        local r=(usec-2) % 3
+                                                  86:        while r>1
+                                                  87:          goto $+1
+                                                  88:          local r=r-2
+                                                  89:        endw
+                                                  90:        if r>0
+                                                  91:          nop
+                                                  92:        endif
+                                                  93:      else
+                                                  94:        while usec>1
+                                                  95:          goto $+1
+                                                  96:          usec=usec-2
+                                                  97:        endw
+                                                  98:        if usec>0
+                                                  99:          nop
+                                                  100:       endif
+                                                  101:     endif
+                                                  102:     endm
+                                                  103:   
+                                                  104:   next_task macro next ; 2 Tcy
+                                                  105:       movlw next
+                                                  106:       movwf task
+                                                  107:       endm
+                                                  108:   
+                                                  109:   init_state_idle macro ; 7 Tcy
+                                                  110:       movlw CMD_SIZE
+                                                  111:       movwf byte_cntr
+                                                  112:       movlw rx_buff
+                                                  113:       movwf FSR
+                                                  114:       movlw task_wait_sync_start
+                                                  115:       movwf task
+                                                  116:       clrf flags
+                                                  117:       endm
+                                                  118:   
+                                                  119:   init_byte_rcv macro  ; 5 Tcy
+                                                  120:       movlw H'80'
+                                                  121:       movwf INDF
+                                                  122:       movlw H'F0'
+                                                  123:       andwf flags, F
+                                                  124:       bsf flags, F_RDBIT
+                                                  125:       endm
+                                                  126:   
+                                                  127:   pwm_clock macro ; 12 Tcy
+                                                  128:       incf pwm, F
+                                                  129:       movfw pwm
+                                                  130:       subwf dc_red, W
+                                                  131:       rlf gpio_temp, F
+                                                  132:       movfw pwm
+                                                  133:       subwf dc_blue, W
+                                                  134:       rlf gpio_temp, F
+                                                  135:       movfw pwm
+                                                  136:       subwf dc_green, W
+                                                  137:       rlf gpio_temp, F
+                                                  138:       comf gpio_temp, W
+                                                  139:   #ifdef DEBUG
+                                                  140:       nop
+                                                  141:   #else
+                                                  142:       movwf GPIO
+                                                  143:   #endif
+                                                  144:       endm
+                                                  145:   
+                                                  146:   ;;;;;;;;;;;;; variables ;;;;;;;;;;;;;;;
+                                                  147:     udata
+                                                  148:   task res 1 ; tâche en cours d'exécution
+                                                  149:   flags res 1 ; indicateurs booléens
+                                                  150:   byte_cntr res 1 ; registre temporaire
+                                                  151:   rx_buff res CMD_SIZE ; mémoire tampon réception des commandes
+                                                  152:   delay_cntr res 1 ; compteur pour macro delay_us
+                                                  153:   pwm res 1  ; compteur pwm
+                                                  154:   dc_red res 1 ; rapport cyclique rouge
+                                                  155:   dc_blue res 1 ; rapport cyclique bleu
+                                                  156:   dc_green res 1 ; rappor cyclique vert
+                                                  157:   gpio_temp res 1 ; variable temporaire état GPIO utilisé par tâche PWM.
+                                                  158:   #ifdef DEBUG
+                                                  159:   uart_byte res 1 ; octet envoyé part uart_tx
+                                                  160:   #endif
+                                                  161:   
+                                                  162:   ;;;;;;;;;;;;; code ;;;;;;;;;;;;;;;;;;;;
+                                                  163:   
+                                                  164:   rst_vector org 0
+0000  0A24     GOTO 0x24                          165:     goto init
+                                                  166:   
+                                                  167:   uart_rx
+                                                  168:   ; réception RS-232 
+0001  0C01     MOVLW 0x1                          169:       movlw 1<<F_RDBIT
+0002  01A9     XORWF 0x9, F                       170:       xorwf flags, F
+0003  0709     BTFSS 0x9, 0x0                     171:       btfss flags, F_RDBIT
+0004  0800     RETLW 0x0                          172:       return
+0005  0629     BTFSC 0x9, 0x1                     173:       btfsc flags, F_STOP
+0006  0A0F     GOTO 0xF                           174:       goto rcv_stop_bit
+0007  0503     BSF STATUS, 0x0                    175:       setc
+0008  0766     BTFSS GPIO, 0x3                    176:       btfss RX
+0009  0403     BCF STATUS, 0x0                    177:       clrc
+000A  0320     RRF INDF, F                        178:       rrf INDF, F
+000B  0703     BTFSS STATUS, 0x0                  179:       skpc
+000C  0800     RETLW 0x0                          180:       return
+000D  0529     BSF 0x9, 0x1                       181:       bsf flags, F_STOP
+000E  0800     RETLW 0x0                          182:       return
+                                                  183:   rcv_stop_bit
+000F  0666     BTFSC GPIO, 0x3                    184:       btfsc RX
+0010  0549     BSF 0x9, 0x2                       185:       bsf flags, F_BYTE
+0011  0800     RETLW 0x0                          186:       return
+                                                  187:   
+                                                  188:   #ifdef DEBUG
+                                                  189:   uart_tx
+                                                  190:   ; transmet octet [uart_byte] , utilisé pur deboggage.
+                                                  191:       bcf TX
+                                                  192:       delay_us (BIT_DLY-D'6')
+                                                  193:       setc
+                                                  194:   tx_bit_loop
+                                                  195:       rrf uart_byte, F
+                                                  196:       skpc
+                                                  197:       bcf TX
+                                                  198:       skpnc
+                                                  199:       bsf TX
+                                                  200:       delay_us (BIT_DLY - D'10')
+                                                  201:       clrc
+                                                  202:       movf uart_byte, F
+                                                  203:       skpz
+                                                  204:       goto tx_bit_loop
+                                                  205:       return
+                                                  206:   
+                                                  207:   echo
+                                                  208:       movlw rx_buff
+                                                  209:       movwf FSR
+                                                  210:       movlw CMD_SIZE
+                                                  211:       movwf byte_cntr
+                                                  212:   echo_loop
+                                                  213:       movfw INDF
+                                                  214:       movwf uart_byte
+                                                  215:       call uart_tx
+                                                  216:       incf FSR
+                                                  217:       decfsz byte_cntr, F
+                                                  218:       goto echo_loop
+                                                  219:       return
+                                                  220:   
+                                                  221:   #endif
+                                                  222:   
+                                                  223:   
+                                                  224:   
+                                                  225:   read_cmd 
+0012  0C0B     MOVLW 0xB                          226:       movlw rx_buff
+0013  0024     MOVWF FSR                          227:       movwf FSR
+0014  0200     MOVF INDF, W                       228:       movf INDF, W
+0015  0643     BTFSC STATUS, 0x2                  229:       skpnz
+0016  0A1A     GOTO 0x1A                          230:       goto accept_cmd
+0017  0F01     XORLW 0x1                          231:       xorlw PIXDEL_ID
+0018  0743     BTFSS STATUS, 0x2                  232:       skpz
+0019  0800     RETLW 0x0                          233:       return  ; +11
+                                                  234:   accept_cmd
+001A  02A4     INCF FSR, F                        235:       incf FSR, F
+001B  0240     COMF INDF, W                       236:       comf INDF, W
+001C  0031     MOVWF 0x11                         237:       movwf dc_red
+001D  02A4     INCF FSR, F                        238:       incf FSR, F
+001E  0240     COMF INDF, W                       239:       comf INDF, W
+001F  0033     MOVWF 0x13                         240:       movwf dc_green
+0020  02A4     INCF FSR, F                        241:       incf FSR, F
+0021  0240     COMF INDF, W                       242:       comf INDF, W
+0022  0032     MOVWF 0x12                         243:       movwf dc_blue
+0023  0800     RETLW 0x0                          244:       return ; + 21
+                                                  245:   
+                                                  246:   
+                                                  247:   ;;;;;;;;;;;; initialisation MCU ;;;;;;;
+                                                  248:   init
+0024  0C08     MOVLW 0x8                          249:       movlw D'8' ; valeur obtenue expérimentalement par mesure de FOSC4 sur GP2
+0025  0025     MOVWF OSCCAL                       250:       movwf OSCCAL
+0026  0CC8     MOVLW 0xC8                         251:       movlw OPTION_CFG
+0027  0002     OPTION                             252:       option
+0028  0066     CLRF GPIO                          253:       clrf GPIO
+0029  0040     CLRW                               254:       clrw
+002A  0006     TRIS GPIO                          255:       tris GPIO
+                                                  256:   #ifdef DEBUG
+                                                  257:       comf GPIO, F
+                                                  258:       movlw D'255'
+                                                  259:       movwf gpio_temp
+                                                  260:   delay_loop
+                                                  261:       clrf TMR0
+                                                  262:       movlw D'250'
+                                                  263:       subwf TMR0, W
+                                                  264:       skpc
+                                                  265:       goto $-3
+                                                  266:       decfsz gpio_temp, F
+                                                  267:       goto delay_loop
+                                                  268:       clrf GPIO
+                                                  269:       movlw A'O'
+                                                  270:       movwf uart_byte
+                                                  271:       call uart_tx
+                                                  272:       movlw A'K'
+                                                  273:       movwf uart_byte
+                                                  274:       movwf uart_byte
+                                                  275:       call uart_tx
+                                                  276:   #endif
+002B  0070     CLRF 0x10                          277:       clrf pwm
+002C  0CFF     MOVLW 0xFF                         278:       movlw H'FF'
+002D  0031     MOVWF 0x11                         279:       movwf dc_red
+002E  0033     MOVWF 0x13                         280:       movwf dc_green
+002F  0032     MOVWF 0x12                         281:       movwf dc_blue
+0030  0C04     MOVLW 0x4                          282:       init_state_idle
+0031  002A     MOVWF byte_cntr
+0032  0C0B     MOVLW 0xB
+0033  0024     MOVWF FSR
+0034  0C48     MOVLW 0x48
+0035  0028     MOVWF task
+0036  0069     CLRF flags
+0037  0061     CLRF TMR0                          283:       clrf TMR0
+                                                  284:   
+                                                  285:   ;;;;;;;;;;;; boucle principale ;;;;;;;;
+                                                  286:   main
+0038  0CCE     MOVLW 0xCE                         287:       movlw PWM_PERIOD + 2
+0039  01E1     ADDWF TMR0, F                      288:       addwf TMR0
+003A  02B0     INCF 0x10, F                       289:       pwm_clock ; 12 Tcy
+003B  0210     MOVF pwm, W
+003C  0091     SUBWF dc_red, W
+003D  0374     RLF gpio_temp, F
+003E  0210     MOVF pwm, W
+003F  0092     SUBWF dc_blue, W
+0040  0374     RLF gpio_temp, F
+0041  0210     MOVF pwm, W
+0042  0093     SUBWF dc_green, W
+0043  0374     RLF gpio_temp, F
+0044  0254     COMF gpio_temp, W
+0045  0026     MOVWF GPIO
+0046  0208     MOVF 0x8, W                        290:       movfw task  ; task switch
+0047  0022     MOVWF PCL                          291:       movwf PCL
+                                                  292:   task_wait_sync_start
+0048  0666     BTFSC GPIO, 0x3                    293:       btfsc RX
+0049  0A79     GOTO 0x79                          294:       goto idle_loop
+004A  0C80     MOVLW 0x80                         295:       init_byte_rcv  ; 5 Tcy
+004B  0020     MOVWF INDF
+004C  0CF0     MOVLW 0xF0
+004D  0169     ANDWF flags, F
+004E  0509     BSF flags, 0x0
+004F  0C52     MOVLW 0x52                         296:       next_task task_sync
+0050  0028     MOVWF task
+0051  0A79     GOTO 0x79                          297:       goto idle_loop
+                                                  298:   task_sync
+0052  0901     CALL 0x1                           299:       call uart_rx   ; <= 15 Tcy
+0053  0749     BTFSS 0x9, 0x2                     300:       btfss flags, F_BYTE
+0054  0A79     GOTO 0x79                          301:       goto idle_loop
+0055  0240     COMF INDF, W                       302:       comf INDF,W
+0056  0743     BTFSS STATUS, 0x2                  303:       skpz
+0057  0A5B     GOTO 0x5B                          304:       goto no_sync
+0058  0C5E     MOVLW 0x5E                         305:       next_task task_wait_start_bit
+0059  0028     MOVWF task
+005A  0A79     GOTO 0x79                          306:       goto idle_loop
+                                                  307:   no_sync
+005B  0C48     MOVLW 0x48                         308:       next_task task_wait_sync_start
+005C  0028     MOVWF task
+005D  0A79     GOTO 0x79                          309:       goto idle_loop
+                                                  310:   task_wait_start_bit
+005E  0666     BTFSC GPIO, 0x3                    311:       btfsc RX
+005F  0A79     GOTO 0x79                          312:       goto idle_loop
+0060  0C80     MOVLW 0x80                         313:       init_byte_rcv
+0061  0020     MOVWF INDF
+0062  0CF0     MOVLW 0xF0
+0063  0169     ANDWF flags, F
+0064  0509     BSF flags, 0x0
+0065  0C68     MOVLW 0x68                         314:       next_task task_cmd_rcv
+0066  0028     MOVWF task
+0067  0A79     GOTO 0x79                          315:       goto idle_loop
+                                                  316:   task_cmd_rcv
+0068  0901     CALL 0x1                           317:       call uart_rx
+0069  0749     BTFSS 0x9, 0x2                     318:       btfss flags, F_BYTE
+006A  0A79     GOTO 0x79                          319:       goto idle_loop
+006B  02A4     INCF FSR, F                        320:       incf FSR
+006C  0C5E     MOVLW 0x5E                         321:       next_task task_wait_start_bit
+006D  0028     MOVWF task
+006E  02EA     DECFSZ 0xA, F                      322:       decfsz byte_cntr, F
+006F  0A79     GOTO 0x79                          323:       goto idle_loop
+                                                  324:   #ifdef DEBUG
+                                                  325:       call echo
+                                                  326:   #else
+0070  0912     CALL 0x12                          327:       call read_cmd ; 11 ou 21
+                                                  328:   #endif
+0071  0C04     MOVLW 0x4                          329:       init_state_idle ; 7
+0072  002A     MOVWF byte_cntr
+0073  0C0B     MOVLW 0xB
+0074  0024     MOVWF FSR
+0075  0C48     MOVLW 0x48
+0076  0028     MOVWF task
+0077  0069     CLRF flags
+0078  0A38     GOTO 0x38                          330:       goto main
+                                                  331:   idle_loop
+0079  0CCC     MOVLW 0xCC                         332:       movlw PWM_PERIOD
+007A  0081     SUBWF TMR0, W                      333:       subwf TMR0, W
+007B  0603     BTFSC STATUS, 0x0                  334:       skpnc
+007C  0A79     GOTO 0x79                          335:       goto idle_loop
+007D  0A38     GOTO 0x38                          336:       goto main
+0FFF  0000     NOP                                337:       end
+                                                  338:   
+                                                  339:   
+                                                  340:   
+                                                  341:   
+                                                  342:   
+                                                  343:   
+                                                  344:   
+                                                  345:   
+                                                  346:   
+                                                  347:   
+                                                  348:   
