@@ -56,6 +56,7 @@ while not done:
     if msvcrt.kbhit(): done=True;
     time.sleep(.001)
 
+	
 c=msvcrt.getch()
 done=False
 print 'test 3, cycle rouge,vert,bleu'
@@ -87,7 +88,16 @@ while not done:
         if msvcrt.kbhit(): 
             done=True
             break;
-	
+
+c=msvcrt.getch()
+done=False
+print 'test 5, stabilite pwm lorsque le bus est saturé de commandes'
+cmd(0,0x01,0x01,0x01)
+while not done:
+    cmd(2,2,3,4)
+    if msvcrt.kbhit(): done=True;
+
+			
 	
 cmd(pixdel_id,0,0,0)
 term.close() 

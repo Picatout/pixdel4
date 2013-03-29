@@ -1,12 +1,12 @@
 ;NOM: pixdel4.asm
-;DESCRIPTION: version 3 du pixdel (version simplifiée).
+;DESCRIPTION: version 4 du pixdel.
 ;             LED RGB controlée par un PIC10F200 ou PIC10F202
 ;             commandes reçues sur GP3 en format UART 8 bits, pas de parité, 1 stop.
 ;
 ;             format commande:
 ;             0xFF id_pixdel r_level g_level b_level
 ;               0xFF synchronisation, ne doit pas être utilisé comme id_pixdel ou niveau d'intensité.
-;               id_pixdel 0 = diffusion, id_unique 1-254
+;               id_pixdel 0 = diffusion, id_unique = 1-254
 ;               r_level niveau de rouge 0-254
 ;               g_level niveau de vert 0-254
 ;               b_level niveau de bleu 0-254
@@ -14,7 +14,7 @@
 ;MCU: PIC10F200 ou 202
 ;DATE: 2013-03-05
 ;AUTEUR: Jacques Deschênes
-;REVISION: 2013-03-23
+;REVISION: 2013-03-29
 ;          version 4, réécriture complète du firmware.
 
 
@@ -23,19 +23,19 @@
   __config _WDTE_OFF & _MCLRE_OFF
 
 ;;;;;;;;;;;;; constantes ;;;;;;;;;;;;;;
-;PIXDEL_ID EQU 1 ; 1-255 doit-être différent pour chaque pixdel
-; pour des raisons pratique PIXDEL_ID est maintenant défini sur comme macro
-; de ligne de commande mpasm.   mpasm -d PIXDEL_ID=n
-;
+PIXDEL_ID EQU 1 ; 1 à 254 doit-être différent pour chaque pixdel
+
 
 BROADCAST EQU 0 ; identifiant message de diffusion
 
 OPTION_CFG EQU B'11001000' ; configuration registre OPTION
 
 RX_P EQU GP3 ; réception uart
+#ifdef DEBUG
 TX_P EQU GP1 ; transmission uart
+#endif
 
-CMD_SIZE EQU 4 ;  octets par commande
+CMD_SIZE EQU 4 ;  octets par commande, excluant l'octet de synchronisation
 
 ; bits couleurs rgb dans GPIO
 GREEN   EQU GP0
@@ -47,6 +47,7 @@ RED     EQU GP2
 ; 9600 BAUD
 BDLY_9600 EQU D'104' ;
 HDLY_9600 EQU D'52' ; délais demi-bit
+; 14400 BAUD
 BDLY_14400 EQU D'69'
 HDLY_14400 EQU D'35'
 ; 19200 BAUD
@@ -56,6 +57,7 @@ HDLY_19200 EQU D'26'
 BDLY_38400 EQU  D'26'
 HDLY_38400 EQU  D'13'
 
+; vitesse utilisée dans cette version
 BIT_DLY  EQU BDLY_9600
 HALF_DLY EQU HDLY_9600
 PWM_PERIOD EQU (~HALF_DLY) + 1 ; période entre chaque appel de pwm_clock
@@ -70,9 +72,9 @@ F_CMD  EQU 8 ; commande reçu et prête à être lue
 ;;;;;;;;;;;;; macros ;;;;;;;;;;;;;;;;;;
 ;#define DEBUG
 
-#define RX GPIO, RX_P
+#define RX GPIO, RX_P ; réception des commande sur cette broche
 #ifdef DEBUG
-#define TX GPIO, TX_P
+#define TX GPIO, TX_P ; transmission rs-232 pour déboguage
 #endif
 
 ; délais en micro-secondes basé sur un Tcy de 1usec.
@@ -128,6 +130,7 @@ init_byte_rcv macro  ; 5 Tcy
     endm
 
 pwm_clock macro ; 12 Tcy
+; contrôle l'intensité des composantes rouge,verte,bleu
     incf pwm, F
     movfw pwm
     subwf dc_red, W
@@ -150,14 +153,14 @@ pwm_clock macro ; 12 Tcy
   udata
 task res 1 ; tâche en cours d'exécution
 flags res 1 ; indicateurs booléens
-byte_cntr res 1 ; registre temporaire
+byte_cntr res 1 ; compteur octets réception commande
 rx_buff res CMD_SIZE ; mémoire tampon réception des commandes
 delay_cntr res 1 ; compteur pour macro delay_us
 pwm res 1  ; compteur pwm
 dc_red res 1 ; rapport cyclique rouge
 dc_blue res 1 ; rapport cyclique bleu
 dc_green res 1 ; rappor cyclique vert
-gpio_temp res 1 ; variable temporaire état GPIO utilisé par tâche PWM.
+gpio_temp res 1 ; variable temporaire état GPIO utilisé par tâche pwm_clock.
 #ifdef DEBUG
 uart_byte res 1 ; octet envoyé part uart_tx
 #endif
@@ -207,7 +210,7 @@ tx_bit_loop
     goto tx_bit_loop
     return
 
-echo ; transmet le contenu de rx_buff, pour dégoguage
+echo ; transmet le contenu de rx_buff, pour déboguage
     movlw rx_buff
     movwf FSR
     movlw CMD_SIZE
@@ -226,7 +229,7 @@ echo_loop
 
 ;;;;;;;;;;;; initialisation MCU ;;;;;;;
 init
-    movlw D'8' ; valeur obtenue expérimentalement par mesure de FOSC4 sur GP2
+    movlw D'8' ; valeur obtenue expérimentalement par mesure de FOSC4=1Mhz sur GP2
     movwf OSCCAL
     movlw OPTION_CFG
     option

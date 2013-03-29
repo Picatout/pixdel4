@@ -57,7 +57,7 @@
         <property key="default.radix" value="HEX"/>
         <property key="enable.case.sensitivity" value="true"/>
         <property key="hex.output.format" value="INHX32"/>
-        <property key="preprocessor.macros" value="PIXDEL_ID=1"/>
+        <property key="preprocessor.macros" value=""/>
         <property key="warning.level" value="0"/>
       </MPASMWIN-AS>
       <MPASMWIN-LD>
@@ -65,11 +65,16 @@
       <PICkit2PlatformTool>
         <property key="pk2settings.3state" value="false"/>
         <property key="pk2settings.preserveee" value="false"/>
-        <property key="pk2settings.setvddvoltage" value=""/>
+        <property key="pk2settings.setvddvoltage" value="5,00"/>
         <property key="pk2settings.userpgmexec" value="true"/>
         <property key="pk2settings.usetargetpower" value="true"/>
       </PICkit2PlatformTool>
       <mpasmsuite>
+        <property key="absolute-mode" value="false"/>
+        <property key="eeprom-width" value="8"/>
+        <property key="extended-mode" value="false"/>
+        <property key="extended-mode-mpasm" value="false"/>
+        <property key="extended-mode-mplink" value="false"/>
       </mpasmsuite>
     </conf>
   </confs>

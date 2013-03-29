@@ -76,14 +76,14 @@ ifeq ($(TYPE_IMAGE), DEBUG_RUN)
 ${OBJECTDIR}/pixdel4.o: pixdel4.asm  nbproject/Makefile-${CND_CONF}.mk
 	@${MKDIR} ${OBJECTDIR} 
 	@${RM} ${OBJECTDIR}/pixdel4.o.d 
-	@${FIXDEPS} dummy.d -e "${OBJECTDIR}/pixdel4.err" $(SILENT) -rsi ${MP_AS_DIR}  -c ${MP_AS} $(MP_EXTRA_AS_PRE) -d__DEBUG -d__MPLAB_DEBUGGER_PICKIT2=1 -q -p$(MP_PROCESSOR_OPTION)  -l\"${OBJECTDIR}/pixdel4.lst\" -e\"${OBJECTDIR}/pixdel4.err\" $(ASM_OPTIONS)-dPIXDEL_ID=1   -o\"${OBJECTDIR}/pixdel4.o\" \"pixdel4.asm\" 
+	@${FIXDEPS} dummy.d -e "${OBJECTDIR}/pixdel4.err" $(SILENT) -rsi ${MP_AS_DIR}  -c ${MP_AS} $(MP_EXTRA_AS_PRE) -d__DEBUG -d__MPLAB_DEBUGGER_PICKIT2=1 -q -p$(MP_PROCESSOR_OPTION)  -l\"${OBJECTDIR}/pixdel4.lst\" -e\"${OBJECTDIR}/pixdel4.err\" $(ASM_OPTIONS)   -o\"${OBJECTDIR}/pixdel4.o\" \"pixdel4.asm\" 
 	@${DEP_GEN} -d "${OBJECTDIR}/pixdel4.o"
 	
 else
 ${OBJECTDIR}/pixdel4.o: pixdel4.asm  nbproject/Makefile-${CND_CONF}.mk
 	@${MKDIR} ${OBJECTDIR} 
 	@${RM} ${OBJECTDIR}/pixdel4.o.d 
-	@${FIXDEPS} dummy.d -e "${OBJECTDIR}/pixdel4.err" $(SILENT) -rsi ${MP_AS_DIR}  -c ${MP_AS} $(MP_EXTRA_AS_PRE) -q -p$(MP_PROCESSOR_OPTION)  -l\"${OBJECTDIR}/pixdel4.lst\" -e\"${OBJECTDIR}/pixdel4.err\" $(ASM_OPTIONS)-dPIXDEL_ID=1   -o\"${OBJECTDIR}/pixdel4.o\" \"pixdel4.asm\" 
+	@${FIXDEPS} dummy.d -e "${OBJECTDIR}/pixdel4.err" $(SILENT) -rsi ${MP_AS_DIR}  -c ${MP_AS} $(MP_EXTRA_AS_PRE) -q -p$(MP_PROCESSOR_OPTION)  -l\"${OBJECTDIR}/pixdel4.lst\" -e\"${OBJECTDIR}/pixdel4.err\" $(ASM_OPTIONS)   -o\"${OBJECTDIR}/pixdel4.o\" \"pixdel4.asm\" 
 	@${DEP_GEN} -d "${OBJECTDIR}/pixdel4.o"
 	
 endif

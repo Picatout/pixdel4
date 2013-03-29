@@ -1,4 +1,4 @@
-EESchema Schematic File Version 2  date 2013-03-07 19:42:18
+EESchema Schematic File Version 2  date 2013-03-29 17:31:11
 LIBS:power
 LIBS:device
 LIBS:transistors
@@ -29,12 +29,14 @@ LIBS:opto
 LIBS:atmel
 LIBS:contrib
 LIBS:valves
-EELAYER 43  0
+LIBS:pixdel-cache
+EELAYER 27 0
 EELAYER END
-$Descr A4 11700 8267
+$Descr A4 11693 8268
+encoding utf-8
 Sheet 1 1
 Title ""
-Date "8 mar 2013"
+Date "29 mar 2013"
 Rev ""
 Comp ""
 Comment1 ""
@@ -57,10 +59,6 @@ Wire Wire Line
 Wire Wire Line
 	4850 2350 4400 2350
 Wire Wire Line
-	4400 2350 4400 2900
-Wire Wire Line
-	4400 2900 7800 2900
-Wire Wire Line
 	7800 2900 7800 3100
 Connection ~ 3800 2100
 Wire Wire Line
@@ -81,9 +79,7 @@ Wire Wire Line
 Wire Wire Line
 	3800 2550 3800 2650
 Wire Wire Line
-	7300 3100 4700 3100
-Wire Wire Line
-	4700 3100 4700 2550
+	4400 3100 7300 3100
 Wire Wire Line
 	4700 2550 4850 2550
 Wire Wire Line
@@ -98,6 +94,8 @@ U 1 1 51393347
 P 3800 2650
 F 0 "#PWR1" H 3800 2650 30  0001 C CNN
 F 1 "GND" H 3800 2580 30  0001 C CNN
+F 2 "" H 3800 2650 60  0001 C CNN
+F 3 "" H 3800 2650 60  0001 C CNN
 	1    3800 2650
 	1    0    0    -1  
 $EndComp
@@ -107,6 +105,8 @@ U 1 1 5139331E
 P 3800 2350
 F 0 "C1" H 3850 2450 50  0000 L CNN
 F 1 "100nF" H 3850 2250 50  0000 L CNN
+F 2 "" H 3800 2350 60  0001 C CNN
+F 3 "" H 3800 2350 60  0001 C CNN
 	1    3800 2350
 	1    0    0    -1  
 $EndComp
@@ -116,6 +116,8 @@ U 1 1 51393306
 P 7550 4700
 F 0 "#PWR2" H 7550 4700 30  0001 C CNN
 F 1 "GND" H 7550 4630 30  0001 C CNN
+F 2 "" H 7550 4700 60  0001 C CNN
+F 3 "" H 7550 4700 60  0001 C CNN
 	1    7550 4700
 	1    0    0    -1  
 $EndComp
@@ -125,6 +127,8 @@ U 1 1 51393300
 P 8850 2200
 F 0 "#PWR3" H 8850 2200 30  0001 C CNN
 F 1 "GND" H 8850 2130 30  0001 C CNN
+F 2 "" H 8850 2200 60  0001 C CNN
+F 3 "" H 8850 2200 60  0001 C CNN
 	1    8850 2200
 	1    0    0    -1  
 $EndComp
@@ -134,6 +138,8 @@ U 1 1 513932F2
 P 9200 1900
 F 0 "K1" V 9150 1900 50  0000 C CNN
 F 1 "CONN_3" V 9250 1900 40  0000 C CNN
+F 2 "" H 9200 1900 60  0001 C CNN
+F 3 "" H 9200 1900 60  0001 C CNN
 	1    9200 1900
 	1    0    0    -1  
 $EndComp
@@ -143,6 +149,8 @@ U 1 1 513932C7
 P 7550 3750
 F 0 "D1" H 7000 4000 60  0000 C CNN
 F 1 "RGB_LED" H 7000 3350 60  0000 C CNN
+F 2 "" H 7550 3750 60  0001 C CNN
+F 3 "" H 7550 3750 60  0001 C CNN
 	1    7550 3750
 	1    0    0    -1  
 $EndComp
@@ -152,7 +160,15 @@ U 1 1 513932A0
 P 4750 1100
 F 0 "U1" H 5600 0   60  0000 C CNN
 F 1 "PIC10F200" H 5550 600 60  0000 C CNN
+F 2 "" H 4750 1100 60  0001 C CNN
+F 3 "" H 4750 1100 60  0001 C CNN
 	1    4750 1100
 	1    0    0    -1  
 $EndComp
+Wire Wire Line
+	7800 2900 4700 2900
+Wire Wire Line
+	4700 2900 4700 2550
+Wire Wire Line
+	4400 2350 4400 3100
 $EndSCHEMATC
