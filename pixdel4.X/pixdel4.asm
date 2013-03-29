@@ -15,7 +15,7 @@
 ;DATE: 2013-03-05
 ;AUTEUR: Jacques Deschênes
 ;REVISION: 2013-03-23
-;          version 4, augmentation de la vitesse uart_rx à 38400 BAUD
+;          version 4, réécriture complète du firmware.
 
 
   include <P10F202.INC>
@@ -43,15 +43,16 @@ BLUE    EQU GP1
 RED     EQU GP2
 
 
-; délais de bit pour 9600 BAUD
+; délais de bit en usec. pour les différentes vitesse rs-232
+; 9600 BAUD
 BDLY_9600 EQU D'104' ;
 HDLY_9600 EQU D'52' ; délais demi-bit
 BDLY_14400 EQU D'69'
 HDLY_14400 EQU D'35'
-;délais de bit pour 19200 BAUD
+; 19200 BAUD
 BDLY_19200 EQU D'52'
 HDLY_19200 EQU D'26'
-; délais de bit pour 38400 BAUD
+; 38400 BAUD
 BDLY_38400 EQU  D'26'
 HDLY_38400 EQU  D'13'
 
@@ -70,7 +71,9 @@ F_CMD  EQU 8 ; commande reçu et prête à être lue
 ;#define DEBUG
 
 #define RX GPIO, RX_P
+#ifdef DEBUG
 #define TX GPIO, TX_P
+#endif
 
 ; délais en micro-secondes basé sur un Tcy de 1usec.
 ; délais maximal  3*255+2=767usec
@@ -187,7 +190,7 @@ rcv_stop_bit
 
 #ifdef DEBUG
 uart_tx
-; transmet octet [uart_byte] , utilisé pur deboggage.
+; transmet octet [uart_byte] , utilisé pour deboggage.
     bcf TX
     delay_us (BIT_DLY-D'6')
     setc
@@ -204,7 +207,7 @@ tx_bit_loop
     goto tx_bit_loop
     return
 
-echo
+echo ; transmet le contenu de rx_buff, pour dégoguage
     movlw rx_buff
     movwf FSR
     movlw CMD_SIZE
@@ -219,29 +222,6 @@ echo_loop
     return
 
 #endif
-
-
-
-read_cmd 
-    movlw rx_buff
-    movwf FSR
-    movf INDF, W
-    skpnz
-    goto accept_cmd
-    xorlw PIXDEL_ID
-    skpz
-    return  ; +11
-accept_cmd
-    incf FSR, F
-    comf INDF, W
-    movwf dc_red
-    incf FSR, F
-    comf INDF, W
-    movwf dc_green
-    incf FSR, F
-    comf INDF, W
-    movwf dc_blue
-    return ; + 21
 
 
 ;;;;;;;;;;;; initialisation MCU ;;;;;;;
@@ -282,38 +262,42 @@ delay_loop
     init_state_idle
     clrf TMR0
 
+
 ;;;;;;;;;;;; boucle principale ;;;;;;;;
+; la tâche pwm_clock s'exécute à chaque cycle du céduleur
+; les autres tâches s'exécute à tour de rôle selon l'état
+; du système.
 main
     movlw PWM_PERIOD + 2
     addwf TMR0
     pwm_clock ; 12 Tcy
     movfw task  ; task switch
-    movwf PCL
-task_wait_sync_start
+    movwf PCL   ; +17 Tcy
+task_wait_sync_start ; attend le bit de démarrage réception octet SYNC (0xFF)
     btfsc RX
-    goto idle_loop
+    goto idle_loop ; +20Tcy
     init_byte_rcv  ; 5 Tcy
     next_task task_sync
-    goto idle_loop
-task_sync
+    goto idle_loop ; +28 Tcy
+task_sync  ; réception octet SYNC
     call uart_rx   ; <= 15 Tcy
     btfss flags, F_BYTE
-    goto idle_loop
-    comf INDF,W
+    goto idle_loop ; <=13 Tcy
+    comf INDF,W ; zéro si octet reçu = 0xFF
     skpz
     goto no_sync
     next_task task_wait_start_bit
     goto idle_loop
-no_sync
+no_sync ; octet reçu n'est pas 0xFF
     next_task task_wait_sync_start
     goto idle_loop
-task_wait_start_bit
+task_wait_start_bit  ; attend bit de démarrage réception des octets de commandes
     btfsc RX
     goto idle_loop
     init_byte_rcv
     next_task task_cmd_rcv
     goto idle_loop
-task_cmd_rcv
+task_cmd_rcv ; réception d'un octet de commande.
     call uart_rx
     btfss flags, F_BYTE
     goto idle_loop
@@ -323,12 +307,40 @@ task_cmd_rcv
     goto idle_loop
 #ifdef DEBUG
     call echo
-#else
-    call read_cmd ; 11 ou 21
-#endif
     init_state_idle ; 7
     goto main
-idle_loop
+#else
+    movlw task_chk_id
+    movwf task
+    goto idle_loop
+task_chk_id ; vérifie l'identifiant avant d'accepter la commande
+    movlw rx_buff
+    movwf FSR
+    movf INDF, W
+    skpnz
+    goto accept_cmd
+    xorlw PIXDEL_ID
+    skpz
+    goto deny_cmd
+accept_cmd  ; commande acceptée.
+    next_task task_cmd 
+    goto idle_loop
+deny_cmd ; commande refusée, mauvais pixdel_id
+    init_state_idle ; 7
+    goto idle_loop
+#endif
+task_cmd ; exécution de la commande reçue.
+    incf FSR, F
+    comf INDF, W
+    movwf dc_red
+    incf FSR, F
+    comf INDF, W
+    movwf dc_green
+    incf FSR, F
+    comf INDF, W
+    movwf dc_blue
+    init_state_idle ; retour à l'état initial.
+idle_loop ; complète le temps pour une période PWM constante
     movlw PWM_PERIOD
     subwf TMR0, W
     skpnc

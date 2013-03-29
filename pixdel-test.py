@@ -1,5 +1,7 @@
 ﻿#test pixdel
-
+# Jacques Deschênes
+# 2013-03-29
+#
 import serial
 import time
 import argparse
@@ -56,14 +58,14 @@ while not done:
 
 c=msvcrt.getch()
 done=False
-print 'test 3, couleur individuelle'
+print 'test 3, cycle rouge,vert,bleu'
 while not done:
     cmd(pixdel_id,0x01,0,0)
-    time.sleep(.1)
+    time.sleep(.25)
     cmd(pixdel_id,0,0x01,0)
-    time.sleep(.1)
+    time.sleep(.25)
     cmd(pixdel_id,0,0,0x01)
-    time.sleep(.1)
+    time.sleep(.25)
     if msvcrt.kbhit(): done=True;    
 	
 c=msvcrt.getch()
