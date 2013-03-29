@@ -35,7 +35,7 @@ OPTION_CFG EQU B'11001000' ; configuration registre OPTION
 RX_P EQU GP3 ; réception uart
 TX_P EQU GP1 ; transmission uart
 
-CMD_SIZE EQU 5 ;  octets par commande
+CMD_SIZE EQU 4 ;  octets par commande
 
 ; bits couleurs rgb dans GPIO
 GREEN   EQU GP0
@@ -63,11 +63,12 @@ PWM_PERIOD EQU (~HALF_DLY) + 1 ; période entre chaque appel de pwm_clock
 F_IDLE EQU 0 ; pas de réception en cours
 F_RDBIT EQU 1  ; toggle lecture bit à tous les 2 cycles
 F_STOP EQU 2  ; réception stop bit
+F_SYNC EQU 3 ; réception octet de synchronisation
 F_CMD  EQU 4 ; commande reçu et prête à être lue
 
 
 ;;;;;;;;;;;;; macros ;;;;;;;;;;;;;;;;;;
-#define DEBUG
+;#define DEBUG
 
 #define RX GPIO, RX_P
 #define TX GPIO, TX_P
@@ -108,6 +109,7 @@ init_rcv_state macro
     movwf FSR
     clrf flags
     bsf flags, F_IDLE
+    bsf flags, F_SYNC
     endm
 
 
@@ -156,12 +158,22 @@ receiving
   bsf flags, F_STOP
   return
 rcv_stop_bit
+  btfsc flags,F_SYNC
+  goto chk_sync
   clrf flags
   bsf flags, F_IDLE
   incf FSR, F
   decfsz byte_cntr, F
   return
   bsf flags, F_CMD
+  return
+chk_sync
+  clrf flags
+  bsf flags, F_IDLE
+  comf INDF, W
+  skpnz
+  return
+  bsf flags, F_SYNC
   return
 
 
