@@ -115,6 +115,7 @@ init_rcv_state macro
 
 ;;;;;;;;;;;;; variables ;;;;;;;;;;;;;;;
   udata
+state res 1 ; état machine
 flags res 1 ; indicateurs booléens
 uart_byte res 1 ; octet reçu sur entrée uart
 byte_cntr res 1 ; registre temporaire
@@ -232,7 +233,7 @@ pwm_clock ; 16 uSec inclant call et return
 #endif
     return
 
-read_cmd ;+4
+read_cmd 
     movlw rx_buff
     movwf FSR
     movf INDF, W
@@ -240,7 +241,7 @@ read_cmd ;+4
     goto accept_cmd
     xorlw PIXDEL_ID
     skpz
-    return
+    return  ; +11
 accept_cmd
     incf FSR, F
     comf INDF, W
@@ -251,7 +252,7 @@ accept_cmd
     incf FSR, F
     comf INDF, W
     movwf dc_blue
-    return 
+    return ; + 21
 
 
 ;;;;;;;;;;;; initialisation MCU ;;;;;;;
@@ -260,27 +261,27 @@ init
   movwf OSCCAL
   movlw OPTION_CFG
   option
+  clrf GPIO
   clrw
   tris GPIO
-  bsf GPIO, RED
-  bsf GPIO, GREEN
-  bsf GPIO, BLUE
+#ifdef DEBUG
+  comf GPIO, F
   movlw D'255'
   movwf gpio_temp
+delay_loop
   clrf TMR0
   movlw D'250'
   subwf TMR0, W
   skpc
   goto $-3
   decfsz gpio_temp, F
-  goto $-6
+  goto delay_loop
   clrf GPIO
   clrf pwm
   movlw H'FF'
   movwf dc_red
   movwf dc_green
   movwf dc_blue
-#ifdef DEBUG
   movlw A'O'
   movwf uart_byte
   call uart_tx
@@ -297,15 +298,15 @@ main
     movlw PWM_PERIOD + 2
     addwf TMR0
     call pwm_clock ; 16uSec
-    call uart_rx   
+    call uart_rx   ;
     btfss flags, F_CMD
     goto wait_loop
 #ifdef DEBUG
     call echo
 #else
-    call read_cmd
+    call read_cmd ; 11 ou 21
 #endif
-    init_rcv_state
+    init_rcv_state ; 7
     goto main
 wait_loop
     movlw PWM_PERIOD
