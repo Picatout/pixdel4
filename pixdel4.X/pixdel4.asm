@@ -35,7 +35,7 @@ OPTION_CFG EQU B'11001000' ; configuration registre OPTION
 RX_P EQU GP3 ; réception uart
 TX_P EQU GP1 ; transmission uart
 
-CMD_SIZE EQU 4 ; 5 octets par commande
+CMD_SIZE EQU 5 ;  octets par commande
 
 ; bits couleurs rgb dans GPIO
 GREEN   EQU GP0
@@ -46,6 +46,8 @@ RED     EQU GP2
 ; délais de bit pour 9600 BAUD
 BDLY_9600 EQU D'104' ;
 HDLY_9600 EQU D'52' ; délais demi-bit
+BDLY_14400 EQU D'69'
+HDLY_14400 EQU D'35'
 ;délais de bit pour 19200 BAUD
 BDLY_19200 EQU D'52'
 HDLY_19200 EQU D'26'
@@ -53,9 +55,15 @@ HDLY_19200 EQU D'26'
 BDLY_38400 EQU  D'26'
 HDLY_38400 EQU  D'13'
 
-BIT_DLY  EQU BDLY_19200
-HALF_DLY EQU HDLY_19200
-PWM_PERIOD EQU HALF_DLY ; période entre chaque appel de pwm_clock
+BIT_DLY  EQU BDLY_9600
+HALF_DLY EQU HDLY_9600
+PWM_PERIOD EQU (~HALF_DLY) + 1 ; période entre chaque appel de pwm_clock
+
+; indicateurs booléens
+F_IDLE EQU 0 ; pas de réception en cours
+F_RDBIT EQU 1  ; toggle lecture bit à tous les 2 cycles
+F_STOP EQU 2  ; réception stop bit
+F_CMD  EQU 4 ; commande reçu et prête à être lue
 
 
 ;;;;;;;;;;;;; macros ;;;;;;;;;;;;;;;;;;
@@ -98,12 +106,14 @@ init_rcv_state macro
     movwf byte_cntr
     movlw rx_buff
     movwf FSR
-    clrf uart_byte
+    clrf flags
+    bsf flags, F_IDLE
     endm
 
 
 ;;;;;;;;;;;;; variables ;;;;;;;;;;;;;;;
   udata
+flags res 1 ; indicateurs booléens
 uart_byte res 1 ; octet reçu sur entrée uart
 byte_cntr res 1 ; registre temporaire
 rx_buff res CMD_SIZE ; mémoire tampon réception des commandes
@@ -120,36 +130,46 @@ rst_vector org 0
   goto init
 
 uart_rx
-; réception RS-232 , 19200 BAUD
-; sortie:
-;   carry = 1 si octet reçu
-;   octet reçu dans uart_byte
+; réception RS-232 
+  btfss flags, F_IDLE
+  goto receiving
   btfsc RX
-  return  ; 5uSec incluant call
+  return 
   movlw H'80'
-  movwf uart_byte ; +6uSec
-  delay_us (PWM_PERIOD - D'6')
-rx_bit_loop
-  call pwm_clock ; +17uSec
-  delay_us (PWM_PERIOD - D'17')
-  call pwm_clock
-  goto $+1
+  movwf INDF
+  bcf flags, F_IDLE
+  bsf flags, F_RDBIT
+  return
+receiving
+  movlw 1<<F_RDBIT
+  xorwf flags, F
+  btfss flags, F_RDBIT
+  return
+  btfsc flags, F_STOP
+  goto rcv_stop_bit
   setc
   btfss RX
   clrc
-  rrf uart_byte, F
+  rrf INDF, F
   skpc
-  goto rx_bit_loop ; +7
-  nop
-  call pwm_clock
-  setc
-  return ; +3
+  return
+  bsf flags, F_STOP
+  return
+rcv_stop_bit
+  clrf flags
+  bsf flags, F_IDLE
+  incf FSR, F
+  decfsz byte_cntr, F
+  return
+  bsf flags, F_CMD
+  return
+
 
 #ifdef DEBUG
 uart_tx
 ; transmet octet [uart_byte] , utilisé pur deboggage.
   bcf TX
-  delay_us BIT_DLY
+  delay_us (BIT_DLY-D'6')
   setc
 tx_bit_loop
   rrf uart_byte, F
@@ -163,11 +183,26 @@ tx_bit_loop
   skpz
   goto tx_bit_loop
   return
+
+echo
+  movlw rx_buff
+  movwf FSR
+  movlw CMD_SIZE
+  movwf byte_cntr
+echo_loop
+  movfw INDF
+  movwf uart_byte
+  call uart_tx
+  incf FSR
+  decfsz byte_cntr, F
+  goto echo_loop
+  return
+
 #endif
 
-pwm_clock ; 17 uSec inclant call et return
+
+pwm_clock ; 16 uSec inclant call et return
     incf pwm, F
-    clrf gpio_temp
     movfw pwm
     subwf dc_red, W
     rlf gpio_temp, F
@@ -180,7 +215,7 @@ pwm_clock ; 17 uSec inclant call et return
     comf gpio_temp, W
 #ifdef DEBUG
     nop
-#elif
+#else
     movwf GPIO
 #endif
     return
@@ -188,25 +223,13 @@ pwm_clock ; 17 uSec inclant call et return
 read_cmd ;+4
     movlw rx_buff
     movwf FSR
-#ifdef DEBUG
-  movfw INDF
-  movwf uart_byte
-  call uart_tx
-#endif
-    call pwm_clock
     movf INDF, W
     skpnz
-    goto broadcast_cmd
-    xorlw PIXDEL_ID
-    skpnz
     goto accept_cmd
-    goto cmd_exit
-broadcast_cmd
-    nop
-    goto $+1
+    xorlw PIXDEL_ID
+    skpz
+    return
 accept_cmd
-    goto $+1
-    call pwm_clock
     incf FSR, F
     comf INDF, W
     movwf dc_red
@@ -216,13 +239,7 @@ accept_cmd
     incf FSR, F
     comf INDF, W
     movwf dc_blue
-    call pwm_clock
-    delay_us (PWM_PERIOD - D'17'- 1)
-cmd_exit
-    nop
-    call pwm_clock
-    init_rcv_state ;+6
-    return ;+8
+    return 
 
 
 ;;;;;;;;;;;; initialisation MCU ;;;;;;;
@@ -246,43 +263,44 @@ init
   decfsz gpio_temp, F
   goto $-6
   clrf GPIO
-  init_rcv_state
   clrf pwm
   movlw H'FF'
   movwf dc_red
   movwf dc_green
   movwf dc_blue
+#ifdef DEBUG
+  movlw A'O'
+  movwf uart_byte
+  call uart_tx
+  movlw A'K'
+  movwf uart_byte
+  movwf uart_byte
+  call uart_tx
+#endif
+  init_rcv_state
+  clrf TMR0
 
 ;;;;;;;;;;;; boucle principale ;;;;;;;;
 main
-;   attend octet de synchronisation
-    call pwm_clock
-    call uart_rx
-    skpc
-    goto main
-chk_sync
-    comf uart_byte, W
-    skpz
-    goto main
-receiving_loop ; réception d'une commande
-    call pwm_clock ; + 17uSec
-    call uart_rx  ; 5uSec si rien reçu
-    skpc  ; +2 si rien reçu
-;    goto store_byte ;
-    goto receiving_loop ; +2,  total boucle 26uSec
-store_byte ; +6
-    movfw uart_byte
-    movwf INDF
-    call pwm_clock
-    incf  FSR, F
-    decfsz byte_cntr, F
-    goto receiving_loop
+    movlw PWM_PERIOD + 2
+    addwf TMR0
+    call pwm_clock ; 16uSec
+    call uart_rx   
+    btfss flags, F_CMD
+    goto wait_loop
+#ifdef DEBUG
+    call echo
+#else
     call read_cmd
-;    nop
-;    call pwm_clock
-;    delay_us (PWM_PERIOD - D'7')
+#endif
+    init_rcv_state
     goto main
-
+wait_loop
+    movlw PWM_PERIOD
+    subwf TMR0, W
+    skpnc
+    goto wait_loop
+    goto main
     end
 
 
