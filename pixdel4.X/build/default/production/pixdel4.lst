@@ -1,4 +1,4 @@
-MPASM  5.49                       PIXDEL4.ASM   3-29-2013  7:15:49         PAGE  1
+MPASM  5.49                       PIXDEL4.ASM   3-29-2013  14:57:25         PAGE  1
 
 
 LOC  OBJECT CODE     LINE SOURCE TEXT
@@ -57,7 +57,7 @@ LOC  OBJECT CODE     LINE SOURCE TEXT
   00000001            00042 BLUE    EQU GP1
   00000002            00043 RED     EQU GP2
                       00044 
-MPASM  5.49                       PIXDEL4.ASM   3-29-2013  7:15:49         PAGE  2
+MPASM  5.49                       PIXDEL4.ASM   3-29-2013  14:57:25         PAGE  2
 
 
 LOC  OBJECT CODE     LINE SOURCE TEXT
@@ -81,318 +81,376 @@ LOC  OBJECT CODE     LINE SOURCE TEXT
   FFFFFFCC            00060 PWM_PERIOD EQU (~HALF_DLY) + 1 ; période entre chaque appel de pwm_clock
                       00061 
                       00062 ; indicateurs booléens
-  00000000            00063 F_IDLE EQU 0 ; pas de réception en cours
-  00000001            00064 F_RDBIT EQU 1  ; toggle lecture bit à tous les 2 cycles
-  00000002            00065 F_STOP EQU 2  ; réception stop bit
-  00000003            00066 F_SYNC EQU 3 ; réception octet de synchronisation
-  00000004            00067 F_CMD  EQU 4 ; commande reçu et prête à être lue
+  00000000            00063 F_RDBIT EQU 0  ; toggle lecture bit à tous les 2 cycles
+  00000001            00064 F_STOP EQU 1  ; réception stop bit
+  00000002            00065 F_BYTE EQU 2 ; octet reçu au complet
+  00000008            00066 F_CMD  EQU 8 ; commande reçu et prête à être lue
+                      00067 
                       00068 
-                      00069 
-                      00070 ;;;;;;;;;;;;; macros ;;;;;;;;;;;;;;;;;;
-                      00071 ;#define DEBUG
-                      00072 
-                      00073 #define RX GPIO, RX_P
-                      00074 #define TX GPIO, TX_P
-                      00075 
-                      00076 ; délais en micro-secondes basé sur un Tcy de 1usec.
-                      00077 ; délais maximal  3*255+2=767usec
-                      00078 delay_us macro usec
-                      00079   local q=(usec-2)/3
-                      00080   if q>0
-                      00081     movlw q
-                      00082     movwf delay_cntr
-                      00083     decfsz delay_cntr,F
-                      00084     goto $-1
-                      00085     nop
-                      00086     local r=(usec-2) % 3
-                      00087     while r>1
-                      00088       goto $+1
-                      00089       local r=r-2
-                      00090     endw
-                      00091     if r>0
-                      00092       nop
-                      00093     endif
-                      00094   else
-                      00095     while usec>1
-                      00096       goto $+1
-                      00097       usec=usec-2
-MPASM  5.49                       PIXDEL4.ASM   3-29-2013  7:15:49         PAGE  3
+                      00069 ;;;;;;;;;;;;; macros ;;;;;;;;;;;;;;;;;;
+                      00070 ;#define DEBUG
+                      00071 
+                      00072 #define RX GPIO, RX_P
+                      00073 #define TX GPIO, TX_P
+                      00074 
+                      00075 ; délais en micro-secondes basé sur un Tcy de 1usec.
+                      00076 ; délais maximal  3*255+2=767usec
+                      00077 delay_us macro usec
+                      00078   local q=(usec-2)/3
+                      00079   if q>0
+                      00080     movlw q
+                      00081     movwf delay_cntr
+                      00082     decfsz delay_cntr,F
+                      00083     goto $-1
+                      00084     nop
+                      00085     local r=(usec-2) % 3
+                      00086     while r>1
+                      00087       goto $+1
+                      00088       local r=r-2
+                      00089     endw
+                      00090     if r>0
+                      00091       nop
+                      00092     endif
+                      00093   else
+                      00094     while usec>1
+                      00095       goto $+1
+                      00096       usec=usec-2
+                      00097     endw
+MPASM  5.49                       PIXDEL4.ASM   3-29-2013  14:57:25         PAGE  3
 
 
 LOC  OBJECT CODE     LINE SOURCE TEXT
   VALUE
 
-                      00098     endw
-                      00099     if usec>0
-                      00100       nop
-                      00101     endif
-                      00102   endif
-                      00103   endm
-                      00104 
-                      00105 init_rcv_state macro
-                      00106     movlw CMD_SIZE
-                      00107     movwf byte_cntr
-                      00108     movlw rx_buff
-                      00109     movwf FSR
-                      00110     clrf flags
-                      00111     bsf flags, F_IDLE
-                      00112     bsf flags, F_SYNC
-                      00113     endm
-                      00114 
-                      00115 
-                      00116 ;;;;;;;;;;;;; variables ;;;;;;;;;;;;;;;
-                      00117   udata
-0000                  00118 flags res 1 ; indicateurs booléens
-0001                  00119 uart_byte res 1 ; octet reçu sur entrée uart
-0002                  00120 byte_cntr res 1 ; registre temporaire
-0003                  00121 rx_buff res CMD_SIZE ; mémoire tampon réception des commandes
-0007                  00122 delay_cntr res 1 ; compteur pour macro delay_us
-0008                  00123 pwm res 1  ; compteur pwm
-0009                  00124 dc_red res 1 ; rapport cyclique rouge
-000A                  00125 dc_blue res 1 ; rapport cyclique bleu
-000B                  00126 dc_green res 1 ; rappor cyclique vert
-000C                  00127 gpio_temp res 1 ; variable temporaire état GPIO utilisé par tâche PWM.
-                      00128 
-                      00129 ;;;;;;;;;;;;; code ;;;;;;;;;;;;;;;;;;;;
-                      00130 
-                      00131 rst_vector org 0
-0000   0A??           00132   goto init
-                      00133 
-0001                  00134 uart_rx
-                      00135 ; réception RS-232 
-0001   0700           00136   btfss flags, F_IDLE
-0002   0A??           00137   goto receiving
-0003   0666           00138   btfsc RX
-Warning[227]: Substituting RETLW 0 for RETURN pseudo-op
-0004   0800           00139   return 
-0005   0C80           00140   movlw H'80'
-0006   0020           00141   movwf INDF
-0007   0400           00142   bcf flags, F_IDLE
-0008   0520           00143   bsf flags, F_RDBIT
-Warning[227]: Substituting RETLW 0 for RETURN pseudo-op
-0009   0800           00144   return
-000A                  00145 receiving
-000A   0C02           00146   movlw 1<<F_RDBIT
-000B   01??           00147   xorwf flags, F
-000C   0720           00148   btfss flags, F_RDBIT
-MPASM  5.49                       PIXDEL4.ASM   3-29-2013  7:15:49         PAGE  4
+                      00098     if usec>0
+                      00099       nop
+                      00100     endif
+                      00101   endif
+                      00102   endm
+                      00103 
+                      00104 next_task macro next ; 2 Tcy
+                      00105     movlw next
+                      00106     movwf task
+                      00107     endm
+                      00108 
+                      00109 init_state_idle macro ; 7 Tcy
+                      00110     movlw CMD_SIZE
+                      00111     movwf byte_cntr
+                      00112     movlw rx_buff
+                      00113     movwf FSR
+                      00114     movlw task_wait_sync_start
+                      00115     movwf task
+                      00116     clrf flags
+                      00117     endm
+                      00118 
+                      00119 init_byte_rcv macro  ; 5 Tcy
+                      00120     movlw H'80'
+                      00121     movwf INDF
+                      00122     movlw H'F0'
+                      00123     andwf flags, F
+                      00124     bsf flags, F_RDBIT
+                      00125     endm
+                      00126 
+                      00127 pwm_clock macro ; 12 Tcy
+                      00128     incf pwm, F
+                      00129     movfw pwm
+                      00130     subwf dc_red, W
+                      00131     rlf gpio_temp, F
+                      00132     movfw pwm
+                      00133     subwf dc_blue, W
+                      00134     rlf gpio_temp, F
+                      00135     movfw pwm
+                      00136     subwf dc_green, W
+                      00137     rlf gpio_temp, F
+                      00138     comf gpio_temp, W
+                      00139 #ifdef DEBUG
+                      00140     nop
+                      00141 #else
+                      00142     movwf GPIO
+                      00143 #endif
+                      00144     endm
+                      00145 
+                      00146 ;;;;;;;;;;;;; variables ;;;;;;;;;;;;;;;
+                      00147   udata
+0000                  00148 task res 1 ; tâche en cours d'exécution
+0001                  00149 flags res 1 ; indicateurs booléens
+0002                  00150 byte_cntr res 1 ; registre temporaire
+MPASM  5.49                       PIXDEL4.ASM   3-29-2013  14:57:25         PAGE  4
 
 
 LOC  OBJECT CODE     LINE SOURCE TEXT
   VALUE
 
+0003                  00151 rx_buff res CMD_SIZE ; mémoire tampon réception des commandes
+0007                  00152 delay_cntr res 1 ; compteur pour macro delay_us
+0008                  00153 pwm res 1  ; compteur pwm
+0009                  00154 dc_red res 1 ; rapport cyclique rouge
+000A                  00155 dc_blue res 1 ; rapport cyclique bleu
+000B                  00156 dc_green res 1 ; rappor cyclique vert
+000C                  00157 gpio_temp res 1 ; variable temporaire état GPIO utilisé par tâche PWM.
+                      00158 #ifdef DEBUG
+                      00159 uart_byte res 1 ; octet envoyé part uart_tx
+                      00160 #endif
+                      00161 
+                      00162 ;;;;;;;;;;;;; code ;;;;;;;;;;;;;;;;;;;;
+                      00163 
+                      00164 rst_vector org 0
+0000   0A??           00165   goto init
+                      00166 
+0001                  00167 uart_rx
+                      00168 ; réception RS-232 
+0001   0C01           00169     movlw 1<<F_RDBIT
+0002   01??           00170     xorwf flags, F
+0003   0700           00171     btfss flags, F_RDBIT
 Warning[227]: Substituting RETLW 0 for RETURN pseudo-op
-000D   0800           00149   return
-000E   0640           00150   btfsc flags, F_STOP
-000F   0A??           00151   goto rcv_stop_bit
-0010   0503           00152   setc
-0011   0766           00153   btfss RX
-0012   0403           00154   clrc
-0013   0320           00155   rrf INDF, F
-0014   0703           00156   skpc
+0004   0800           00172     return
+0005   0620           00173     btfsc flags, F_STOP
+0006   0A??           00174     goto rcv_stop_bit
+0007   0503           00175     setc
+0008   0766           00176     btfss RX
+0009   0403           00177     clrc
+000A   0320           00178     rrf INDF, F
+000B   0703           00179     skpc
 Warning[227]: Substituting RETLW 0 for RETURN pseudo-op
-0015   0800           00157   return
-0016   0540           00158   bsf flags, F_STOP
+000C   0800           00180     return
+000D   0520           00181     bsf flags, F_STOP
 Warning[227]: Substituting RETLW 0 for RETURN pseudo-op
-0017   0800           00159   return
-0018                  00160 rcv_stop_bit
-0018   0660           00161   btfsc flags,F_SYNC
-0019   0A??           00162   goto chk_sync
-001A   00??           00163   clrf flags
-001B   0500           00164   bsf flags, F_IDLE
-001C   02A4           00165   incf FSR, F
-001D   02??           00166   decfsz byte_cntr, F
+000E   0800           00182     return
+000F                  00183 rcv_stop_bit
+000F   0666           00184     btfsc RX
+0010   0540           00185     bsf flags, F_BYTE
 Warning[227]: Substituting RETLW 0 for RETURN pseudo-op
-001E   0800           00167   return
-001F   0580           00168   bsf flags, F_CMD
-Warning[227]: Substituting RETLW 0 for RETURN pseudo-op
-0020   0800           00169   return
-0021                  00170 chk_sync
-0021   00??           00171   clrf flags
-0022   0500           00172   bsf flags, F_IDLE
-0023   0240           00173   comf INDF, W
-0024   0643           00174   skpnz
-Warning[227]: Substituting RETLW 0 for RETURN pseudo-op
-0025   0800           00175   return
-0026   0560           00176   bsf flags, F_SYNC
-Warning[227]: Substituting RETLW 0 for RETURN pseudo-op
-0027   0800           00177   return
-                      00178 
-                      00179 
-                      00180 #ifdef DEBUG
-                      00181 uart_tx
-                      00182 ; transmet octet [uart_byte] , utilisé pur deboggage.
-                      00183   bcf TX
-                      00184   delay_us (BIT_DLY-D'6')
-                      00185   setc
-                      00186 tx_bit_loop
-                      00187   rrf uart_byte, F
-                      00188   skpc
-                      00189   bcf TX
-                      00190   skpnc
-                      00191   bsf TX
-                      00192   delay_us (BIT_DLY - D'10')
-                      00193   clrc
-                      00194   movf uart_byte, F
-MPASM  5.49                       PIXDEL4.ASM   3-29-2013  7:15:49         PAGE  5
+0011   0800           00186     return
+                      00187 
+                      00188 #ifdef DEBUG
+                      00189 uart_tx
+                      00190 ; transmet octet [uart_byte] , utilisé pur deboggage.
+                      00191     bcf TX
+                      00192     delay_us (BIT_DLY-D'6')
+                      00193     setc
+                      00194 tx_bit_loop
+                      00195     rrf uart_byte, F
+                      00196     skpc
+                      00197     bcf TX
+                      00198     skpnc
+                      00199     bsf TX
+MPASM  5.49                       PIXDEL4.ASM   3-29-2013  14:57:25         PAGE  5
 
 
 LOC  OBJECT CODE     LINE SOURCE TEXT
   VALUE
 
-                      00195   skpz
-                      00196   goto tx_bit_loop
-                      00197   return
-                      00198 
-                      00199 echo
-                      00200   movlw rx_buff
-                      00201   movwf FSR
-                      00202   movlw CMD_SIZE
-                      00203   movwf byte_cntr
-                      00204 echo_loop
-                      00205   movfw INDF
-                      00206   movwf uart_byte
-                      00207   call uart_tx
-                      00208   incf FSR
-                      00209   decfsz byte_cntr, F
-                      00210   goto echo_loop
-                      00211   return
-                      00212 
-                      00213 #endif
-                      00214 
-                      00215 
-0028                  00216 pwm_clock ; 16 uSec inclant call et return
-0028   02??           00217     incf pwm, F
-0029   02??           00218     movfw pwm
-002A   00??           00219     subwf dc_red, W
-002B   03??           00220     rlf gpio_temp, F
-002C   02??           00221     movfw pwm
-002D   00??           00222     subwf dc_blue, W
-002E   03??           00223     rlf gpio_temp, F
-002F   02??           00224     movfw pwm
-0030   00??           00225     subwf dc_green, W
-0031   03??           00226     rlf gpio_temp, F
-0032   02??           00227     comf gpio_temp, W
-                      00228 #ifdef DEBUG
-                      00229     nop
-                      00230 #else
-0033   0026           00231     movwf GPIO
-                      00232 #endif
+                      00200     delay_us (BIT_DLY - D'10')
+                      00201     clrc
+                      00202     movf uart_byte, F
+                      00203     skpz
+                      00204     goto tx_bit_loop
+                      00205     return
+                      00206 
+                      00207 echo
+                      00208     movlw rx_buff
+                      00209     movwf FSR
+                      00210     movlw CMD_SIZE
+                      00211     movwf byte_cntr
+                      00212 echo_loop
+                      00213     movfw INDF
+                      00214     movwf uart_byte
+                      00215     call uart_tx
+                      00216     incf FSR
+                      00217     decfsz byte_cntr, F
+                      00218     goto echo_loop
+                      00219     return
+                      00220 
+                      00221 #endif
+                      00222 
+                      00223 
+                      00224 
+0012                  00225 read_cmd 
+0012   0C??           00226     movlw rx_buff
+0013   0024           00227     movwf FSR
+0014   0200           00228     movf INDF, W
+0015   0643           00229     skpnz
+0016   0A??           00230     goto accept_cmd
+0017   0F01           00231     xorlw PIXDEL_ID
+0018   0743           00232     skpz
 Warning[227]: Substituting RETLW 0 for RETURN pseudo-op
-0034   0800           00233     return
-                      00234 
-0035                  00235 read_cmd 
-0035   0C??           00236     movlw rx_buff
-0036   0024           00237     movwf FSR
-0037   0200           00238     movf INDF, W
-0038   0643           00239     skpnz
-0039   0A??           00240     goto accept_cmd
-003A   0F01           00241     xorlw PIXDEL_ID
-003B   0743           00242     skpz
+0019   0800           00233     return  ; +11
+001A                  00234 accept_cmd
+001A   02A4           00235     incf FSR, F
+001B   0240           00236     comf INDF, W
+001C   00??           00237     movwf dc_red
+001D   02A4           00238     incf FSR, F
+001E   0240           00239     comf INDF, W
+001F   00??           00240     movwf dc_green
+0020   02A4           00241     incf FSR, F
+0021   0240           00242     comf INDF, W
+0022   00??           00243     movwf dc_blue
 Warning[227]: Substituting RETLW 0 for RETURN pseudo-op
-003C   0800           00243     return  ; +11
-003D                  00244 accept_cmd
-003D   02A4           00245     incf FSR, F
-MPASM  5.49                       PIXDEL4.ASM   3-29-2013  7:15:49         PAGE  6
+0023   0800           00244     return ; + 21
+                      00245 
+                      00246 
+                      00247 ;;;;;;;;;;;; initialisation MCU ;;;;;;;
+0024                  00248 init
+0024   0C08           00249     movlw D'8' ; valeur obtenue expérimentalement par mesure de FOSC4 sur GP2
+0025   0025           00250     movwf OSCCAL
+MPASM  5.49                       PIXDEL4.ASM   3-29-2013  14:57:25         PAGE  6
 
 
 LOC  OBJECT CODE     LINE SOURCE TEXT
   VALUE
 
-003E   0240           00246     comf INDF, W
-003F   00??           00247     movwf dc_red
-0040   02A4           00248     incf FSR, F
-0041   0240           00249     comf INDF, W
-0042   00??           00250     movwf dc_green
-0043   02A4           00251     incf FSR, F
-0044   0240           00252     comf INDF, W
-0045   00??           00253     movwf dc_blue
-Warning[227]: Substituting RETLW 0 for RETURN pseudo-op
-0046   0800           00254     return ; + 21
-                      00255 
-                      00256 
-                      00257 ;;;;;;;;;;;; initialisation MCU ;;;;;;;
-0047                  00258 init
-0047   0C08           00259   movlw D'8' ; valeur obtenue expérimentalement par mesure de FOSC4 sur GP2
-0048   0025           00260   movwf OSCCAL
-0049   0CC8           00261   movlw OPTION_CFG
-004A   0002           00262   option
-004B   0066           00263   clrf GPIO
-004C   0040           00264   clrw
-004D   0006           00265   tris GPIO
-                      00266 #ifdef DEBUG
-                      00267   comf GPIO, F
-                      00268   movlw D'255'
-                      00269   movwf gpio_temp
-                      00270 delay_loop
-                      00271   clrf TMR0
-                      00272   movlw D'250'
-                      00273   subwf TMR0, W
-                      00274   skpc
-                      00275   goto $-3
-                      00276   decfsz gpio_temp, F
-                      00277   goto delay_loop
-                      00278   clrf GPIO
-                      00279   clrf pwm
-                      00280   movlw H'FF'
-                      00281   movwf dc_red
-                      00282   movwf dc_green
-                      00283   movwf dc_blue
-                      00284   movlw A'O'
-                      00285   movwf uart_byte
-                      00286   call uart_tx
-                      00287   movlw A'K'
-                      00288   movwf uart_byte
-                      00289   movwf uart_byte
-                      00290   call uart_tx
-                      00291 #endif
-                      00292   init_rcv_state
-004E   0C04               M     movlw CMD_SIZE
-004F   00??               M     movwf byte_cntr
-0050   0C??               M     movlw rx_buff
-0051   0024               M     movwf FSR
-0052   00??               M     clrf flags
-MPASM  5.49                       PIXDEL4.ASM   3-29-2013  7:15:49         PAGE  7
-
-
-LOC  OBJECT CODE     LINE SOURCE TEXT
-  VALUE
-
-0053   0500               M     bsf flags, F_IDLE
-0054   0560               M     bsf flags, F_SYNC
-0055   0061           00293   clrf TMR0
-                      00294 
-                      00295 ;;;;;;;;;;;; boucle principale ;;;;;;;;
-0056                  00296 main
-0056   0CCE           00297     movlw PWM_PERIOD + 2
+0026   0CC8           00251     movlw OPTION_CFG
+0027   0002           00252     option
+0028   0066           00253     clrf GPIO
+0029   0040           00254     clrw
+002A   0006           00255     tris GPIO
+                      00256 #ifdef DEBUG
+                      00257     comf GPIO, F
+                      00258     movlw D'255'
+                      00259     movwf gpio_temp
+                      00260 delay_loop
+                      00261     clrf TMR0
+                      00262     movlw D'250'
+                      00263     subwf TMR0, W
+                      00264     skpc
+                      00265     goto $-3
+                      00266     decfsz gpio_temp, F
+                      00267     goto delay_loop
+                      00268     clrf GPIO
+                      00269     movlw A'O'
+                      00270     movwf uart_byte
+                      00271     call uart_tx
+                      00272     movlw A'K'
+                      00273     movwf uart_byte
+                      00274     movwf uart_byte
+                      00275     call uart_tx
+                      00276 #endif
+002B   00??           00277     clrf pwm
+002C   0CFF           00278     movlw H'FF'
+002D   00??           00279     movwf dc_red
+002E   00??           00280     movwf dc_green
+002F   00??           00281     movwf dc_blue
+                      00282     init_state_idle
+0030   0C04               M     movlw CMD_SIZE
+0031   00??               M     movwf byte_cntr
+0032   0C??               M     movlw rx_buff
+0033   0024               M     movwf FSR
+0034   0C??               M     movlw task_wait_sync_start
+0035   00??               M     movwf task
+0036   00??               M     clrf flags
+0037   0061           00283     clrf TMR0
+                      00284 
+                      00285 ;;;;;;;;;;;; boucle principale ;;;;;;;;
+0038                  00286 main
+0038   0CCE           00287     movlw PWM_PERIOD + 2
 Message[305]: Using default destination of 1 (file).
-0057   01E1           00298     addwf TMR0
-0058   09??           00299     call pwm_clock ; 16uSec
-0059   09??           00300     call uart_rx   ;
-005A   0780           00301     btfss flags, F_CMD
-005B   0A??           00302     goto wait_loop
-                      00303 #ifdef DEBUG
-                      00304     call echo
-                      00305 #else
-005C   09??           00306     call read_cmd ; 11 ou 21
-                      00307 #endif
-                      00308     init_rcv_state ; 7
-005D   0C04               M     movlw CMD_SIZE
-005E   00??               M     movwf byte_cntr
-005F   0C??               M     movlw rx_buff
-0060   0024               M     movwf FSR
-0061   00??               M     clrf flags
-0062   0500               M     bsf flags, F_IDLE
-0063   0560               M     bsf flags, F_SYNC
-0064   0A??           00309     goto main
-0065                  00310 wait_loop
-0065   0CCC           00311     movlw PWM_PERIOD
-0066   0081           00312     subwf TMR0, W
-0067   0603           00313     skpnc
-0068   0A??           00314     goto wait_loop
-0069   0A??           00315     goto main
-0FEB                  00316     end
-MPASM  5.49                       PIXDEL4.ASM   3-29-2013  7:15:49         PAGE  8
+0039   01E1           00288     addwf TMR0
+                      00289     pwm_clock ; 12 Tcy
+003A   02??               M     incf pwm, F
+003B   02??               M     movfw pwm
+003C   00??               M     subwf dc_red, W
+003D   03??               M     rlf gpio_temp, F
+003E   02??               M     movfw pwm
+003F   00??               M     subwf dc_blue, W
+MPASM  5.49                       PIXDEL4.ASM   3-29-2013  14:57:25         PAGE  7
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+0040   03??               M     rlf gpio_temp, F
+0041   02??               M     movfw pwm
+0042   00??               M     subwf dc_green, W
+0043   03??               M     rlf gpio_temp, F
+0044   02??               M     comf gpio_temp, W
+                          M #ifdef DEBUG
+                          M     nop
+                          M #else
+0045   0026               M     movwf GPIO
+                          M #endif
+0046   02??           00290     movfw task  ; task switch
+0047   0022           00291     movwf PCL
+0048                  00292 task_wait_sync_start
+0048   0666           00293     btfsc RX
+0049   0A??           00294     goto idle_loop
+                      00295     init_byte_rcv  ; 5 Tcy
+004A   0C80               M     movlw H'80'
+004B   0020               M     movwf INDF
+004C   0CF0               M     movlw H'F0'
+004D   01??               M     andwf flags, F
+004E   0500               M     bsf flags, F_RDBIT
+                      00296     next_task task_sync
+004F   0C??               M     movlw task_sync
+0050   00??               M     movwf task
+0051   0A??           00297     goto idle_loop
+0052                  00298 task_sync
+0052   09??           00299     call uart_rx   ; <= 15 Tcy
+0053   0740           00300     btfss flags, F_BYTE
+0054   0A??           00301     goto idle_loop
+0055   0240           00302     comf INDF,W
+0056   0743           00303     skpz
+0057   0A??           00304     goto no_sync
+                      00305     next_task task_wait_start_bit
+0058   0C??               M     movlw task_wait_start_bit
+0059   00??               M     movwf task
+005A   0A??           00306     goto idle_loop
+005B                  00307 no_sync
+                      00308     next_task task_wait_sync_start
+005B   0C??               M     movlw task_wait_sync_start
+005C   00??               M     movwf task
+005D   0A??           00309     goto idle_loop
+005E                  00310 task_wait_start_bit
+005E   0666           00311     btfsc RX
+005F   0A??           00312     goto idle_loop
+                      00313     init_byte_rcv
+0060   0C80               M     movlw H'80'
+0061   0020               M     movwf INDF
+0062   0CF0               M     movlw H'F0'
+0063   01??               M     andwf flags, F
+0064   0500               M     bsf flags, F_RDBIT
+                      00314     next_task task_cmd_rcv
+0065   0C??               M     movlw task_cmd_rcv
+0066   00??               M     movwf task
+MPASM  5.49                       PIXDEL4.ASM   3-29-2013  14:57:25         PAGE  8
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+0067   0A??           00315     goto idle_loop
+0068                  00316 task_cmd_rcv
+0068   09??           00317     call uart_rx
+0069   0740           00318     btfss flags, F_BYTE
+006A   0A??           00319     goto idle_loop
+Message[305]: Using default destination of 1 (file).
+006B   02A4           00320     incf FSR
+                      00321     next_task task_wait_start_bit
+006C   0C??               M     movlw task_wait_start_bit
+006D   00??               M     movwf task
+006E   02??           00322     decfsz byte_cntr, F
+006F   0A??           00323     goto idle_loop
+                      00324 #ifdef DEBUG
+                      00325     call echo
+                      00326 #else
+0070   09??           00327     call read_cmd ; 11 ou 21
+                      00328 #endif
+                      00329     init_state_idle ; 7
+0071   0C04               M     movlw CMD_SIZE
+0072   00??               M     movwf byte_cntr
+0073   0C??               M     movlw rx_buff
+0074   0024               M     movwf FSR
+0075   0C??               M     movlw task_wait_sync_start
+0076   00??               M     movwf task
+0077   00??               M     clrf flags
+0078   0A??           00330     goto main
+0079                  00331 idle_loop
+0079   0CCC           00332     movlw PWM_PERIOD
+007A   0081           00333     subwf TMR0, W
+007B   0603           00334     skpnc
+007C   0A??           00335     goto idle_loop
+007D   0A??           00336     goto main
+0FEB                  00337     end
+MPASM  5.49                       PIXDEL4.ASM   3-29-2013  14:57:25         PAGE  9
 
 
 SYMBOL TABLE
@@ -418,11 +476,10 @@ DC                                00000001
 F                                 00000001
 FOSC4                             00000000
 FSR                               00000004
-F_CMD                             00000004
-F_IDLE                            00000000
-F_RDBIT                           00000001
-F_STOP                            00000002
-F_SYNC                            00000003
+F_BYTE                            00000002
+F_CMD                             00000008
+F_RDBIT                           00000000
+F_STOP                            00000001
 GP0                               00000000
 GP1                               00000001
 GP2                               00000002
@@ -451,13 +508,13 @@ PSA                               00000003
 PWM_PERIOD                        FFFFFFCC
 RED                               00000002
 RX                                GPIO, RX_P
-MPASM  5.49                       PIXDEL4.ASM   3-29-2013  7:15:49         PAGE  9
+RX_P                              00000003
+MPASM  5.49                       PIXDEL4.ASM   3-29-2013  14:57:25         PAGE 10
 
 
 SYMBOL TABLE
   LABEL                             VALUE 
 
-RX_P                              00000003
 STATUS                            00000003
 T0CS                              00000005
 T0SE                              00000004
@@ -486,38 +543,43 @@ _WDTE_ON                          00000FFF
 _WDT_OFF                          00000FFB
 _WDT_ON                           00000FFF
 __10F202                          00000001
-accept_cmd                        0000003D
+accept_cmd                        0000001A
 byte_cntr                         00000002
-chk_sync                          00000021
 dc_blue                           0000000A
 dc_green                          0000000B
 dc_red                            00000009
 delay_cntr                        00000007
 delay_us                          
-flags                             00000000
+flags                             00000001
 gpio_temp                         0000000C
-init                              00000047
-init_rcv_state                    
-main                              00000056
+idle_loop                         00000079
+init                              00000024
+init_byte_rcv                     
+init_state_idle                   
+main                              00000038
+next_task                         
+no_sync                           0000005B
 pwm                               00000008
-pwm_clock                         00000028
-rcv_stop_bit                      00000018
-read_cmd                          00000035
-receiving                         0000000A
+pwm_clock                         
+rcv_stop_bit                      0000000F
+read_cmd                          00000012
 rst_vector                        00000000
 rx_buff                           00000003
-uart_byte                         00000001
+task                              00000000
+task_cmd_rcv                      00000068
+task_sync                         00000052
+MPASM  5.49                       PIXDEL4.ASM   3-29-2013  14:57:25         PAGE 11
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+task_wait_start_bit               0000005E
+task_wait_sync_start              00000048
 uart_rx                           00000001
-wait_loop                         00000065
-
-MPASM  5.49                       PIXDEL4.ASM   3-29-2013  7:15:49         PAGE 10
-
-
-
-
 
 Errors   :     0
-Warnings :    12 reported,     0 suppressed
-Messages :     1 reported,     0 suppressed
+Warnings :     6 reported,     0 suppressed
+Messages :     2 reported,     0 suppressed
 
 

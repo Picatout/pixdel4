@@ -60,11 +60,10 @@ HALF_DLY EQU HDLY_9600
 PWM_PERIOD EQU (~HALF_DLY) + 1 ; période entre chaque appel de pwm_clock
 
 ; indicateurs booléens
-F_IDLE EQU 0 ; pas de réception en cours
-F_RDBIT EQU 1  ; toggle lecture bit à tous les 2 cycles
-F_STOP EQU 2  ; réception stop bit
-F_SYNC EQU 3 ; réception octet de synchronisation
-F_CMD  EQU 4 ; commande reçu et prête à être lue
+F_RDBIT EQU 0  ; toggle lecture bit à tous les 2 cycles
+F_STOP EQU 1  ; réception stop bit
+F_BYTE EQU 2 ; octet reçu au complet
+F_CMD  EQU 8 ; commande reçu et prête à être lue
 
 
 ;;;;;;;;;;;;; macros ;;;;;;;;;;;;;;;;;;
@@ -102,119 +101,30 @@ delay_us macro usec
   endif
   endm
 
-init_rcv_state macro
+next_task macro next ; 2 Tcy
+    movlw next
+    movwf task
+    endm
+
+init_state_idle macro ; 7 Tcy
     movlw CMD_SIZE
     movwf byte_cntr
     movlw rx_buff
     movwf FSR
+    movlw task_wait_sync_start
+    movwf task
     clrf flags
-    bsf flags, F_IDLE
-    bsf flags, F_SYNC
     endm
 
+init_byte_rcv macro  ; 5 Tcy
+    movlw H'80'
+    movwf INDF
+    movlw H'F0'
+    andwf flags, F
+    bsf flags, F_RDBIT
+    endm
 
-;;;;;;;;;;;;; variables ;;;;;;;;;;;;;;;
-  udata
-state res 1 ; état machine
-flags res 1 ; indicateurs booléens
-uart_byte res 1 ; octet reçu sur entrée uart
-byte_cntr res 1 ; registre temporaire
-rx_buff res CMD_SIZE ; mémoire tampon réception des commandes
-delay_cntr res 1 ; compteur pour macro delay_us
-pwm res 1  ; compteur pwm
-dc_red res 1 ; rapport cyclique rouge
-dc_blue res 1 ; rapport cyclique bleu
-dc_green res 1 ; rappor cyclique vert
-gpio_temp res 1 ; variable temporaire état GPIO utilisé par tâche PWM.
-
-;;;;;;;;;;;;; code ;;;;;;;;;;;;;;;;;;;;
-
-rst_vector org 0
-  goto init
-
-uart_rx
-; réception RS-232 
-  btfss flags, F_IDLE
-  goto receiving
-  btfsc RX
-  return 
-  movlw H'80'
-  movwf INDF
-  bcf flags, F_IDLE
-  bsf flags, F_RDBIT
-  return
-receiving
-  movlw 1<<F_RDBIT
-  xorwf flags, F
-  btfss flags, F_RDBIT
-  return
-  btfsc flags, F_STOP
-  goto rcv_stop_bit
-  setc
-  btfss RX
-  clrc
-  rrf INDF, F
-  skpc
-  return
-  bsf flags, F_STOP
-  return
-rcv_stop_bit
-  btfsc flags,F_SYNC
-  goto chk_sync
-  clrf flags
-  bsf flags, F_IDLE
-  incf FSR, F
-  decfsz byte_cntr, F
-  return
-  bsf flags, F_CMD
-  return
-chk_sync
-  clrf flags
-  bsf flags, F_IDLE
-  comf INDF, W
-  skpnz
-  return
-  bsf flags, F_SYNC
-  return
-
-
-#ifdef DEBUG
-uart_tx
-; transmet octet [uart_byte] , utilisé pur deboggage.
-  bcf TX
-  delay_us (BIT_DLY-D'6')
-  setc
-tx_bit_loop
-  rrf uart_byte, F
-  skpc
-  bcf TX
-  skpnc
-  bsf TX
-  delay_us (BIT_DLY - D'10')
-  clrc
-  movf uart_byte, F
-  skpz
-  goto tx_bit_loop
-  return
-
-echo
-  movlw rx_buff
-  movwf FSR
-  movlw CMD_SIZE
-  movwf byte_cntr
-echo_loop
-  movfw INDF
-  movwf uart_byte
-  call uart_tx
-  incf FSR
-  decfsz byte_cntr, F
-  goto echo_loop
-  return
-
-#endif
-
-
-pwm_clock ; 16 uSec inclant call et return
+pwm_clock macro ; 12 Tcy
     incf pwm, F
     movfw pwm
     subwf dc_red, W
@@ -231,7 +141,86 @@ pwm_clock ; 16 uSec inclant call et return
 #else
     movwf GPIO
 #endif
+    endm
+
+;;;;;;;;;;;;; variables ;;;;;;;;;;;;;;;
+  udata
+task res 1 ; tâche en cours d'exécution
+flags res 1 ; indicateurs booléens
+byte_cntr res 1 ; registre temporaire
+rx_buff res CMD_SIZE ; mémoire tampon réception des commandes
+delay_cntr res 1 ; compteur pour macro delay_us
+pwm res 1  ; compteur pwm
+dc_red res 1 ; rapport cyclique rouge
+dc_blue res 1 ; rapport cyclique bleu
+dc_green res 1 ; rappor cyclique vert
+gpio_temp res 1 ; variable temporaire état GPIO utilisé par tâche PWM.
+#ifdef DEBUG
+uart_byte res 1 ; octet envoyé part uart_tx
+#endif
+
+;;;;;;;;;;;;; code ;;;;;;;;;;;;;;;;;;;;
+
+rst_vector org 0
+  goto init
+
+uart_rx
+; réception RS-232 
+    movlw 1<<F_RDBIT
+    xorwf flags, F
+    btfss flags, F_RDBIT
     return
+    btfsc flags, F_STOP
+    goto rcv_stop_bit
+    setc
+    btfss RX
+    clrc
+    rrf INDF, F
+    skpc
+    return
+    bsf flags, F_STOP
+    return
+rcv_stop_bit
+    btfsc RX
+    bsf flags, F_BYTE
+    return
+
+#ifdef DEBUG
+uart_tx
+; transmet octet [uart_byte] , utilisé pur deboggage.
+    bcf TX
+    delay_us (BIT_DLY-D'6')
+    setc
+tx_bit_loop
+    rrf uart_byte, F
+    skpc
+    bcf TX
+    skpnc
+    bsf TX
+    delay_us (BIT_DLY - D'10')
+    clrc
+    movf uart_byte, F
+    skpz
+    goto tx_bit_loop
+    return
+
+echo
+    movlw rx_buff
+    movwf FSR
+    movlw CMD_SIZE
+    movwf byte_cntr
+echo_loop
+    movfw INDF
+    movwf uart_byte
+    call uart_tx
+    incf FSR
+    decfsz byte_cntr, F
+    goto echo_loop
+    return
+
+#endif
+
+
 
 read_cmd 
     movlw rx_buff
@@ -257,62 +246,93 @@ accept_cmd
 
 ;;;;;;;;;;;; initialisation MCU ;;;;;;;
 init
-  movlw D'8' ; valeur obtenue expérimentalement par mesure de FOSC4 sur GP2
-  movwf OSCCAL
-  movlw OPTION_CFG
-  option
-  clrf GPIO
-  clrw
-  tris GPIO
+    movlw D'8' ; valeur obtenue expérimentalement par mesure de FOSC4 sur GP2
+    movwf OSCCAL
+    movlw OPTION_CFG
+    option
+    clrf GPIO
+    clrw
+    tris GPIO
 #ifdef DEBUG
-  comf GPIO, F
-  movlw D'255'
-  movwf gpio_temp
+    comf GPIO, F
+    movlw D'255'
+    movwf gpio_temp
 delay_loop
-  clrf TMR0
-  movlw D'250'
-  subwf TMR0, W
-  skpc
-  goto $-3
-  decfsz gpio_temp, F
-  goto delay_loop
-  clrf GPIO
-  clrf pwm
-  movlw H'FF'
-  movwf dc_red
-  movwf dc_green
-  movwf dc_blue
-  movlw A'O'
-  movwf uart_byte
-  call uart_tx
-  movlw A'K'
-  movwf uart_byte
-  movwf uart_byte
-  call uart_tx
+    clrf TMR0
+    movlw D'250'
+    subwf TMR0, W
+    skpc
+    goto $-3
+    decfsz gpio_temp, F
+    goto delay_loop
+    clrf GPIO
+    movlw A'O'
+    movwf uart_byte
+    call uart_tx
+    movlw A'K'
+    movwf uart_byte
+    movwf uart_byte
+    call uart_tx
 #endif
-  init_rcv_state
-  clrf TMR0
+    clrf pwm
+    movlw H'FF'
+    movwf dc_red
+    movwf dc_green
+    movwf dc_blue
+    init_state_idle
+    clrf TMR0
 
 ;;;;;;;;;;;; boucle principale ;;;;;;;;
 main
     movlw PWM_PERIOD + 2
     addwf TMR0
-    call pwm_clock ; 16uSec
-    call uart_rx   ;
-    btfss flags, F_CMD
-    goto wait_loop
+    pwm_clock ; 12 Tcy
+    movfw task  ; task switch
+    movwf PCL
+task_wait_sync_start
+    btfsc RX
+    goto idle_loop
+    init_byte_rcv  ; 5 Tcy
+    next_task task_sync
+    goto idle_loop
+task_sync
+    call uart_rx   ; <= 15 Tcy
+    btfss flags, F_BYTE
+    goto idle_loop
+    comf INDF,W
+    skpz
+    goto no_sync
+    next_task task_wait_start_bit
+    goto idle_loop
+no_sync
+    next_task task_wait_sync_start
+    goto idle_loop
+task_wait_start_bit
+    btfsc RX
+    goto idle_loop
+    init_byte_rcv
+    next_task task_cmd_rcv
+    goto idle_loop
+task_cmd_rcv
+    call uart_rx
+    btfss flags, F_BYTE
+    goto idle_loop
+    incf FSR
+    next_task task_wait_start_bit
+    decfsz byte_cntr, F
+    goto idle_loop
 #ifdef DEBUG
     call echo
 #else
     call read_cmd ; 11 ou 21
 #endif
-    init_rcv_state ; 7
+    init_state_idle ; 7
     goto main
-wait_loop
+idle_loop
     movlw PWM_PERIOD
     subwf TMR0, W
     skpnc
-    goto wait_loop
+    goto idle_loop
     goto main
     end
 
