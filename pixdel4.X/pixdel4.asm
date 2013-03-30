@@ -14,13 +14,16 @@
 ;MCU: PIC10F200 ou 202
 ;DATE: 2013-03-05
 ;AUTEUR: Jacques Deschênes
-;REVISION: 2013-03-29
+;REVISION: 2013-03-30
 ;          version 4, réécriture complète du firmware.
 
 
   include <P10F202.INC>
 
   __config _WDTE_OFF & _MCLRE_OFF
+
+;#define DEBUG
+;#define CALIB ; calibration de l'oscillateur
 
 ;;;;;;;;;;;;; constantes ;;;;;;;;;;;;;;
 PIXDEL_ID EQU 1 ; 1 à 254 doit-être différent pour chaque pixdel
@@ -44,6 +47,7 @@ RED     EQU GP2
 
 
 ; délais de bit en usec. pour les différentes vitesse rs-232
+; Valeur pour Fosc/4=1Mhz
 ; 9600 BAUD
 BDLY_9600 EQU D'104' ;
 HDLY_9600 EQU D'52' ; délais demi-bit
@@ -57,9 +61,10 @@ HDLY_19200 EQU D'26'
 BDLY_38400 EQU  D'26'
 HDLY_38400 EQU  D'13'
 
-; vitesse utilisée dans cette version
-BIT_DLY  EQU BDLY_9600
-HALF_DLY EQU HDLY_9600
+; vitesse utilisée dans cette version, valeur délais pour oscillateur
+; calibré à ~= 4,619Mhz
+BIT_DLY  EQU D'80'
+HALF_DLY EQU D'40'
 PWM_PERIOD EQU (~HALF_DLY) + 1 ; période entre chaque appel de pwm_clock
 
 ; indicateurs booléens
@@ -68,15 +73,17 @@ F_STOP EQU 1  ; réception stop bit
 F_BYTE EQU 2 ; octet reçu au complet
 F_CMD  EQU 8 ; commande reçu et prête à être lue
 
+OSC_CALIB EQU D'33' ; obtenu expérimentalement pour que Fosc/4 ~= 40*28800
+                 ; muliple entier de la demi-période de 14400 BAUD
 
 ;;;;;;;;;;;;; macros ;;;;;;;;;;;;;;;;;;
-;#define DEBUG
 
 #define RX GPIO, RX_P ; réception des commande sur cette broche
 #ifdef DEBUG
 #define TX GPIO, TX_P ; transmission rs-232 pour déboguage
 #endif
 
+;>>>>> cette macro n'est pas utilisé dans la version actuelle <<<<<<
 ; délais en micro-secondes basé sur un Tcy de 1usec.
 ; délais maximal  3*255+2=767usec
 delay_us macro usec
@@ -168,6 +175,13 @@ uart_byte res 1 ; octet envoyé part uart_tx
 ;;;;;;;;;;;;; code ;;;;;;;;;;;;;;;;;;;;
 
 rst_vector org 0
+#ifdef CALIB
+    movlw (D'33'<<1)+1 ;ajusté pour que Fosc/4~=40*28800
+    movwf OSCCAL
+    goto $
+#endif
+  movlw OSC_CALIB<<1 ; valeur obtenu expérimentalement, doit-être ajusté pour chaque MCU
+  movwf OSCCAL
   goto init
 
 uart_rx
@@ -229,8 +243,6 @@ echo_loop
 
 ;;;;;;;;;;;; initialisation MCU ;;;;;;;
 init
-    movlw D'8' ; valeur obtenue expérimentalement par mesure de FOSC4=1Mhz sur GP2
-    movwf OSCCAL
     movlw OPTION_CFG
     option
     clrf GPIO
@@ -312,7 +324,7 @@ task_cmd_rcv ; réception d'un octet de commande.
     call echo
     init_state_idle ; 7
     goto main
-#else
+#endif
     movlw task_chk_id
     movwf task
     goto idle_loop
@@ -331,7 +343,6 @@ accept_cmd  ; commande acceptée.
 deny_cmd ; commande refusée, mauvais pixdel_id
     init_state_idle ; 7
     goto idle_loop
-#endif
 task_cmd ; exécution de la commande reçue.
     incf FSR, F
     comf INDF, W

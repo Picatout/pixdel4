@@ -26,7 +26,7 @@ def cmd(id,r,g,b):
     sync()
     term.write(chr(id)+chr(r)+chr(g)+chr(b))
 	
-term=serial.Serial(port=device,baudrate=9600,timeout=0)
+term=serial.Serial(port=device,baudrate=14400,timeout=0)
 
 delay=.005
 pixdel_id=1
@@ -91,7 +91,7 @@ while not done:
 
 c=msvcrt.getch()
 done=False
-print 'test 5, stabilite pwm lorsque le bus est saturé de commandes'
+print 'test 5, stabilite pwm lorsque le bus est sature de commandes'
 cmd(0,0x01,0x01,0x01)
 while not done:
     cmd(2,2,3,4)
